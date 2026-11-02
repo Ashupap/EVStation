@@ -207,7 +207,7 @@ services:
 
   keycloak:
     image: keycloak/keycloak:26.8.1
-    command: start-dev --import-realm
+    command: start-dev --import-realm --health-enabled=true
     volumes:
       - ./keycloak/evstation-realm.json:/opt/keycloak/data/import/evstation-realm.json:ro
     environment:

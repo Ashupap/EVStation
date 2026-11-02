@@ -4,6 +4,8 @@
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "bruteForceProtected": true,
   "loginWithEmailAllowed": true,
   "rememberMe": false,
   "verifyEmail": false,

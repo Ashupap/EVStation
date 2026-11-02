@@ -103,7 +103,11 @@ stop citrine` — prefer the pnpm commands unless you have a reason.
   behavior)
 - Keycloak: <http://localhost:8180> — realm `evstation`, client `dashboard`
   (public, PKCE, redirect URIs limited to localhost). Bootstrap admin login
-  comes from `infra/compose/.env`.
+  comes from `infra/compose/.env`. The realm imports with self-registration
+  and password-reset off, brute-force lockout on (`bruteForceProtected:
+true` — check via the admin API), `sslRequired=external`. Management
+  health endpoint `<http://localhost:8181/health>` is enabled through
+  `--health-enabled=true` (Quarkus management interface, container 9000).
 - Our Postgres: `postgresql://evstation@localhost:5432/evstation` (password
   from `infra/compose/.env`)
 - CitrineOS's Postgres (read-mostly; used by the smoke test to verify
