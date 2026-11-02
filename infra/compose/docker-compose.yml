@@ -20,6 +20,10 @@
 #      ACME) are not opted into — the upstream compose enables them with
 #      `'{}'`, but Phase 0 does not use certificates. Remove the comment marks
 #      below if you need them.
+#   7. Hasura enforces HASURA_GRAPHQL_ADMIN_SECRET (from HASURA_ADMIN_SECRET
+#      in infra/compose/.env); `citrine` and `citrine-ui` receive the same
+#      value so the Dal / UI keep working (upstream passes dev secrets via
+#      env files).
 #
 # Deviations are recorded in docs/DECISIONS.md and the port map lives in
 # docs/RUNBOOK.md.
@@ -68,6 +72,9 @@ services:
       # The Swagger logo is read straight from the filesystem instead of
       # through fileAccess, so it needs the full path too.
       CITRINEOS_SWAGGER_LOGOPATH: '/usr/local/apps/citrineos/apps/ocpp-server/dist/assets/logo.png'
+      # Deviation note 7: the Dal talks to Hasura with the same admin secret
+      # graphql-engine now enforces (upstream env/file value is replaced).
+      HASURA_ADMIN_SECRET: ${HASURA_ADMIN_SECRET:?HASURA_ADMIN_SECRET missing in infra/compose/.env}
     depends_on:
       ocpp-db:
         condition: service_healthy
@@ -103,6 +110,10 @@ services:
       - ui
     env_file:
       - ../../third_party/citrineos-core/apps/operator-ui/.env.local
+    environment:
+      # Deviation note 7: override the .env.local HASURA_ADMIN_SECRET with the
+      # value graphql-engine actually enforces.
+      HASURA_ADMIN_SECRET: ${HASURA_ADMIN_SECRET:?HASURA_ADMIN_SECRET missing in infra/compose/.env}
     ports:
       # Host 13000: 3000 is permanently reserved on this host (header note 3).
       - 127.0.0.1:13000:3000
@@ -162,6 +173,8 @@ services:
         condition: service_healthy
     environment:
       HASURA_GRAPHQL_DATABASE_URL: postgres://citrine:citrine@ocpp-db:5432/citrine
+      # Deviation note 7: Hasura is admin-secret-protected (Phase 0 mini-goal).
+      HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_ADMIN_SECRET:?HASURA_ADMIN_SECRET missing in infra/compose/.env}
       HASURA_GRAPHQL_ENABLE_CONSOLE: 'true'
       HASURA_GRAPHQL_DEV_MODE: 'true'
       HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup, http-log, webhook-log, websocket-log, query-log

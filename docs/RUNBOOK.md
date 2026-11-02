@@ -113,8 +113,10 @@ true` — check via the admin API), `sslRequired=external`. Management
 - CitrineOS's Postgres (read-mostly; used by the smoke test to verify
   records): `postgresql://citrine:citrine@localhost:15432/citrine`
 - Hasura console (upstream CitrineOS data API): <http://localhost:8090>
-  ⚠ protected by `HASURA_ADMIN_SECRET` from `infra/compose/.env` in this
-  repository's overlay; scripts always read the secret from that env file.
+  — GraphQL API rejects requests without the `x-hasura-admin-secret`
+  header; `/healthz` stays open by Hasura's design (accepted upstream
+  behavior). The secret lives in `infra/compose/.env`; scripts always read
+  it from there; the console asks for it on first load.
   Never expose 8090 beyond 127.0.0.1.
 - EVStation dashboard (Phase 1): dev port **3200**; API service (Phase 1): dev
   port **4000** — both reserved now, configured via their app `.env.example`.
