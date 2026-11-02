@@ -14,6 +14,8 @@
     "typecheck": "pnpm -r typecheck && tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "health": "node scripts/health.mjs",
+    "health:json": "node scripts/health.mjs --json",
     "install:ci": "pnpm install --frozen-lockfile",
     "dev:bootstrap": "node scripts/bootstrap-citrineos.mjs",
     "dev:stack": "pnpm dev:bootstrap && node scripts/dev-stack.mjs up",

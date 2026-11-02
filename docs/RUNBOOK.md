@@ -95,6 +95,18 @@ pnpm dev:stack:logs   # tail stack logs
 Stopping an individual service: `docker compose --project-name evstation ...
 stop citrine` — prefer the pnpm commands unless you have a reason.
 
+### Health check
+
+```shell
+pnpm health    # 7 probes: citrine-http/docs, ocpp WS 8081, hasura healthz,
+               # keycloak discovery+mgmt /health, our-db/ocpp-db/rabbitmq TCP
+```
+
+Passes exit 0 only when everything is up; timeouts are 7 s per probe and
+probes are independent of the compose healthchecks. Machine-readable output:
+`node scripts/health.mjs --json` (call node directly — `pnpm` prepends a
+banner to stdout). Secrets are never printed by the script.
+
 ## What runs where
 
 - Swagger / OpenAPI docs: <http://localhost:8088/docs> (CitrineOS HTTP API)
