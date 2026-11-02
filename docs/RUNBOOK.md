@@ -115,6 +115,34 @@ stop citrine` — prefer the pnpm commands unless you have a reason.
 - EVStation dashboard (Phase 1): dev port **3200**; API service (Phase 1): dev
   port **4000** — both reserved now, configured via their app `.env.example`.
 
+## OCPP WebSocket exposure (Phase 0 → real chargers)
+
+Phase 0 binds all OCPP WebSocket ports (`8081/8082/8443/8444`) to
+`127.0.0.1` on purpose: only the simulator connects, and profile 0 (no auth,
+`allowUnknownChargingStations: true` on 8081) exists solely for testing —
+CitrineOS marks that websocket server "development and testing only".
+
+Before real chargers connect, at minimum:
+
+1. **Bind address** — publish the WS ports on the intended interface (load
+   balancer / `0.0.0.0` on a hardened host) instead of `127.0.0.1`, and put
+   the server behind proper network access controls.
+2. **Security profile** — real chargers must use profile 1 (basic auth;
+   provision per-station passwords via `POST /commands/setStationPassword`
+   at the pin) or profile 2/3 (TLS / mTLS — requires TLS material reachable
+   through CitrineOS's `fileAccess`, see websocket-servers JSON). The
+   profile-0 server should then be disabled (`allowUnknownChargingStations:
+false` at minimum, or removed from the file — see the pinned version's
+   config notes).
+3. **Unknown-station policy** — production profiles already reject unknown
+   charging stations; commission stations deliberately (location → station →
+   EVSEs → connectors through our Phase 2 flows, not by hand).
+4. Keycloak part of the same change set: ADR-0008 (`jwt` mode instead of the
+   `localDev` HTTP API auth).
+
+Tracked as hardening output for Phase 5; nothing hard-gates it before a real
+deployment slice.
+
 ## Troubleshooting
 
 - **`git ls-remote` fails in `dev:bootstrap`** — no network to GitHub, or a
