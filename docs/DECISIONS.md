@@ -51,7 +51,9 @@ Test-only constants are flagged where relevant:
   build if the lockfile is out of sync with `package.json`. (4) `packageManager`
   is an exact pnpm version, so Corepack and CI agree on the package manager.
 - **Consequences.** Upgrade PRs must also commit the regenerated
-  `pnpm-lock.yaml`; CI blocks unnoticed drift.
+  `pnpm-lock.yaml`; CI blocks unnoticed drift. `.npmrc` sets
+  `engine-strict=true`, so installs and scripts fail fast on unsupported Node
+  versions instead of only warning.
 
 ## Infrastructure
 
