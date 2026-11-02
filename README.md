@@ -3,10 +3,10 @@
 An EV charging Central Management System (CMS) for India, built on top of
 [CitrineOS](https://github.com/citrineos/citrineos-core) (open-source OCPP 2.0.1 & 1.6 CSMS).
 
-Work is phased; see `PRD.md` for the full product requirements and
+Work is phased; see `docs/PRD.md` for the full product requirements and
 `docs/RUNBOOK.md` for setup once Phase 0 lands.
 
-- Language: TypeScript (Node 20+ LTS) across a pnpm monorepo
+- Language: TypeScript (Node 24 LTS) across a pnpm monorepo
 - Auth: Keycloak (OIDC)
 - Database: PostgreSQL 16 (PostGIS) — separate from CitrineOS's own database
 - Local dev: Docker Compose (Postgres, Keycloak, CitrineOS stack, charger simulator)

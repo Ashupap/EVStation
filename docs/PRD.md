@@ -51,7 +51,7 @@ Browsers (operator dashboard)
 
 | Concern | Choice |
 | --- | --- |
-| Language | TypeScript everywhere (Node 20+ LTS) |
+| Language | TypeScript everywhere (Node 24 LTS, exact-pinned; see docs/DECISIONS.md) |
 | Monorepo | pnpm workspaces |
 | API service | Fastify with Zod schemas, OpenAPI spec generated from code |
 | Our database | PostgreSQL 15+ (separate database from CitrineOS) |
