@@ -1,6 +1,7 @@
 {
   "name": "evstation",
   "private": true,
+  "type": "module",
   "engines": {
     "node": ">=20"
   },
@@ -10,6 +11,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "typecheck": "pnpm -r typecheck && tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -19,7 +23,8 @@
     "lint-staged": "17.6.0",
     "prettier": "3.9.10",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.72.1"
+    "typescript-eslint": "8.72.1",
+    "vitest": "3.2.7"
   },
   "description": "EV charging Central Management System (CMS) for India, built on CitrineOS.",
   "repository": {
