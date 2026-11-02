@@ -1,0 +1,10 @@
+# Build artifacts and third-party code are not formatted
+node_modules/
+dist/
+coverage/
+third_party/
+.next/
+pnpm-lock.yaml
+
+# Product spec is the property of the author; do not churn it with formatting
+PRD.md
