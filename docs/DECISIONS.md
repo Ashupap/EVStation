@@ -90,10 +90,10 @@ Test-only constants are flagged where relevant:
     requires the idTag to exist exactly once in `Authorizations` with status
     `Accepted`.
 - **Consequences.** Upgrades = change `citrineos.json` + re-diff the vendored
-  services against the new upstream compose (procedure in ADR-0008) +
-  regenerate smoke fixtures. The 8080→8088 host mapping is the standing
-  default for local dev (ADR-0007); other hosts may map 8080 back (upstream
-  value) if that port is genuinely free there.
+  services against the new upstream compose (procedure in ADR-0007,
+  support/EOL watch → ADR-0009) + regenerate smoke fixtures. The 8080→8088
+  host mapping is the standing default for local dev (ADR-0007); other hosts
+  may map 8080 back (upstream value) if that port is genuinely free there.
 
 ### ADR-0005: Exact-pinned dev-stack image tags
 
@@ -202,3 +202,51 @@ evstation-realm.json`) declares realm `evstation` with one public client
   runs, naming the port, the variable to change, and the file to change it
   in. Nothing is ever killed automatically. 8080/3000 remain untouched by
   this stack on every host.
+
+- **Vendored-compose diff procedure (run at every CitrineOS upgrade).** In
+  `/tmp/opencode/citrineos-core` (or a fresh clone of the new pin):
+  `git diff <old-pin> <new-pin> -- docker-compose.yml` to see upstream's own
+  changes; then `git diff <old-pin-ref>:docker-compose.yml
+infra/compose/docker-compose.yml` for ours-vs-new; repeat for
+  `apps/ocpp-server/src/assets` and `apps/ocpp-server/db/hasura-metadata`
+  ( elemento vendored copies in `infra/compose/` and
+  `third_party/citrineos-core/`). Every deliberate divergence we add
+  (ports, our-db service, Keycloak block, env-file switches) must still be
+  present and documented after the refresh — the upgrade commit lists
+  applied deltas in its message; nothing new is absorbed silently.
+
+### ADR-0009: Pinned-images support status & EOL watch (2026-11 snapshot)
+
+- **Context.** Phase 0 pins exact image tags (ADR-0005); upgrades of
+  CitrineOS itself (ADR-0004) will re-evaluate these. Recorded snapshot of
+  upstream support status as of 2026-11-02, plus watch items; verify dates
+  again at each upgrade rather than trusting this table blindly.
+- **Snapshot.**
+  - `ghcr.io/citrineos/citrineos-server:v2.1.0` — actively developed
+    upstream (release train continues at the citrine repo). Fine.
+  - `postgis/postgis:16-3.5` — PostgreSQL 16 supported to ~Nov 2028;
+    PostGIS 3.5 stable. Fine.
+  - `keycloak/keycloak:26.8.1` — current 26.x line (community, latest
+    minor is maintained). Fine; track 27.x adoption at upgrade time.
+  - `hasura/graphql-engine:v2.40.3.cli-migrations-v3` — **watch item**:
+    v2.40 shipped mid-2024 and is outside Hasura's supported LTS lines
+    (v2.45 LTS EOL Dec 2027, v2.50 LTS EOL Dec 2028; current releases are
+    v2.51.x). Upstream pins it; we keep the pin for reproducibility, but a
+    shared environment needs a Hasura on a supported LTS line — upgrade
+    spec'd in Phase 5 hardening (metadata lives in citrine-db; standard
+    Hasura upgrade procedure applies).
+  - `rabbitmq:3.13.7-management` — **watch item**: OSS community support
+    for 3.13.x ended Sep 2024; newer 3.13 patches are commercial-only (3.13
+    line itself runs to Dec 2029 under paid support). 4.2.x is the current
+    OSS LTS. Upstream floats `rabbitmq:3-management` (currently still 3.13.x
+    on Docker Hub — re-verify at upgrade). Queue persistence needs nothing
+    exotic, so keep the exact pin for dev; broker upgrade ride along with
+    CitrineOS's own.
+  - Toolchain: Node 24.22.2 LTS (maintenance after Oct 2026; support to
+    ~Apr 2028, matching ADR-0001); pnpm 10.30.3 (track the latest pnpm
+    major upstream publishes — support policy not pinned down in writing,
+    so re-check rather than assume).
+- **Consequences.** The two watch items (Hasura, RabbitMQ) are recorded as
+  upgrade considerations in Phase 5; dev containers are not exposed, so no
+  free-security-update gap bites us in Phase 0. Any upgrade changes this
+  ADR with a dated snapshot line.
