@@ -1,0 +1,12 @@
+{
+  "repo": "https://github.com/citrineos/citrineos-core",
+  "ref": "v2.1.0",
+  "commit": "4fd7599b91c2fb6e6065e7c9b94be69880cced27",
+  "sparsePaths": [
+    "docker-compose.yml",
+    "docker-compose.local.yml",
+    "apps/ocpp-server/src/assets",
+    "apps/ocpp-server/db/hasura-metadata",
+    "apps/operator-ui/.env.local"
+  ]
+}

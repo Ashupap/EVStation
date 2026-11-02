@@ -1,0 +1,41 @@
+{
+  "realm": "evstation",
+  "displayName": "EVStation",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "accessTokenLifespan": 1800,
+  "ssoSessionIdleTimeout": 7200,
+  "clients": [
+    {
+      "clientId": "dashboard",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "description": "Operator dashboard (public SPA). Authorization Code + PKCE only.",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "frontchannelLogout": true,
+      "redirectUris": ["http://localhost:3000/*"],
+      "webOrigins": ["http://localhost:3000"],
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "optionalClientScopes": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [],
+    "client": {}
+  },
+  "groups": [],
+  "users": [],
+  "scopeMappings": [],
+  "clientScopeMappings": {}
+}

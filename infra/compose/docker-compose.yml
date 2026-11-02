@@ -1,0 +1,231 @@
+# EVStation local development stack.
+#
+# Vendored from CitrineOS v2.1.0 (commit 4fd7599b91c2fb6e6065e7c9b94be69880cced27,
+# see infra/compose/citrineos.json, the records in docs/DECISIONS.md, and the
+# upstream file at third_party/citrineos-core/docker-compose.yml). The
+# `citrine`, `amqp-broker`, `ocpp-db` and `graphql-engine` services below are a
+# faithful copy of the upstream definitions, with only these deviations:
+#
+#   1. Image tags pinned: upstream `:latest` → `:v2.1.0` (exact pin policy).
+#   2. All published ports bound to 127.0.0.1 (upstream binds 0.0.0.0).
+#   3. CitrineOS HTTP published on host 8088 (not 8080) and the Operator UI on
+#      host 13000 (not 3000): this development host already runs unrelated
+#      services on 8080 and 3000. Container-side ports are unchanged, and the
+#      OCPP WebSocket ports (8081/8082) keep the documented upstream values.
+#   4. ocpp-db published on host 15432 (not 5432): our own database uses 5432.
+#   5. postgres/rabbitmq data live in named volumes instead of the upstream
+#      repo-relative bind mounts, so nothing is written into third_party/.
+#   6. The certificate-authority integrations (Hubject v2gCA, charging-station
+#      ACME) are not opted into — the upstream compose enables them with
+#      `'{}'`, but Phase 0 does not use certificates. Remove the comment marks
+#      below if you need them.
+#
+# Deviations are recorded in docs/DECISIONS.md and the port map lives in
+# docs/RUNBOOK.md.
+name: evstation
+
+x-citrine-cas-enabled:
+  &citrine-cas-enabled
+  # CITRINEOS_INTEGRATIONS_V2GCA: '{}'
+  # CITRINEOS_INTEGRATIONS_CHARGINGSTATIONCA: '{}'
+
+services:
+  citrine:
+    image: ghcr.io/citrineos/citrineos-server:v2.1.0
+    pull_policy: missing # pinned tag; upstream uses `always` on :latest
+    volumes:
+      # Role definitions. Mounted so an edit takes effect without a rebuild
+      # or a restart (upstream mount target preserved exactly).
+      - ../../third_party/citrineos-core/apps/ocpp-server/src/assets/roles-seed.json:/usr/local/apps/citrineos/apps/ocpp-server/dist/assets/roles-seed.json
+    environment:
+      # Which process this container runs (EventGroup): 'all' = router + every module + APIs.
+      APP_NAME: 'all'
+      # Read by entrypoint.sh, not by the config loader.
+      DB_STRATEGY: 'migrate'
+      # ── SystemConfig overrides ─────────────────────────────────────────────
+      # Every field of CitrineOS's config schema can be set as
+      # CITRINEOS_<PATH_TO_FIELD>. Defaults are local-dev values; the list
+      # below mirrors upstream docker-compose.yml at the pinned tag.
+      CITRINEOS_HOST: '0.0.0.0'
+      CITRINEOS_DATABASE_HOST: 'ocpp-db'
+      CITRINEOS_MESSAGEBROKER_AMQP_URL: 'amqp://guest:guest@amqp-broker:5672'
+      CITRINEOS_TIMEOUTS_MAXCALLLENGTHSECONDS: '20'
+      # The fileAccess root, which websocket-servers.json, the TLS material
+      # and the ACME account key are all read relative to.
+      CITRINEOS_FILEACCESS_LOCAL_DEFAULTFILEPATH: '/usr/local/apps/citrineos/apps/ocpp-server/dist/assets'
+      # The Swagger logo is read straight from the filesystem instead of
+      # through fileAccess, so it needs the full path too.
+      CITRINEOS_SWAGGER_LOGOPATH: '/usr/local/apps/citrineos/apps/ocpp-server/dist/assets/logo.png'
+    depends_on:
+      ocpp-db:
+        condition: service_healthy
+      amqp-broker:
+        condition: service_healthy
+    ports:
+      # HTTP + Swagger docs — container 8080 stays upstream; host moved (see header note 3).
+      - 127.0.0.1:8088:8080
+      # OCPP WebSocket servers — upstream paths/ports.
+      - 127.0.0.1:8081:8081 # security profile 0 (no auth)
+      - 127.0.0.1:8082:8082 # security profile 1 (basic HTTP auth)
+      - 127.0.0.1:8443:8443 # security profile 2 (TLS)
+      - 127.0.0.1:8444:8444 # security profile 3 (mTLS)
+      - 127.0.0.1:9229:9229 # Node.js debugger
+    healthcheck:
+      test: [
+          'CMD-SHELL',
+          "node -e \"const net = require(\\\"net\\\"); const client =
+          net.createConnection(8080, \\\"127.0.0.1\\\", () => { client.end();
+          process.exit(0); }); client.on(\\\"error\\\", () =>
+          process.exit(1)); client.setTimeout(5000, () => { client.destroy();
+          process.exit(1); });\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  citrine-ui:
+    image: ghcr.io/citrineos/citrineos-operator-ui:v2.1.0
+    pull_policy: missing
+    profiles:
+      - ui
+    env_file:
+      - ../../third_party/citrineos-core/apps/operator-ui/.env.local
+    ports:
+      # Host moved to 13000: this host already runs something on 3000 (header note 3).
+      - 127.0.0.1:13000:3000
+    depends_on:
+      citrine:
+        condition: service_healthy
+      graphql-engine:
+        condition: service_healthy
+
+  amqp-broker:
+    image: rabbitmq:3.13.7-management
+    ports:
+      - 127.0.0.1:15672:15672
+      - 127.0.0.1:5672:5672
+    environment:
+      RABBITMQ_DEFAULT_USER: 'guest'
+      RABBITMQ_DEFAULT_PASS: 'guest'
+    volumes:
+      # Named volume instead of the upstream repo-relative bind mount (header note 5).
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q check_port_connectivity
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
+  ocpp-db:
+    # CitrineOS's own database: PostGIS-enabled PostgreSQL 16 (upstream pin).
+    image: postgis/postgis:16-3.5
+    platform: linux/amd64
+    ports:
+      # Host remapped 5432 → 15432: our own database owns 5432 (header note 4).
+      - 127.0.0.1:15432:5432
+    volumes:
+      # Named volume instead of the upstream repo-relative bind mount (header note 5).
+      - citrine-db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: citrine
+      POSTGRES_USER: citrine
+      POSTGRES_PASSWORD: 'citrine'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 5432 -U citrine -d citrine']
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  graphql-engine:
+    image: hasura/graphql-engine:v2.40.3.cli-migrations-v3
+    volumes:
+      - ../../third_party/citrineos-core/apps/ocpp-server/db/hasura-metadata:/hasura-metadata
+    ports:
+      - 127.0.0.1:8090:8080
+    restart: always
+    depends_on:
+      citrine:
+        condition: service_healthy
+    environment:
+      HASURA_GRAPHQL_DATABASE_URL: postgres://citrine:citrine@ocpp-db:5432/citrine
+      HASURA_GRAPHQL_ENABLE_CONSOLE: 'true'
+      HASURA_GRAPHQL_DEV_MODE: 'true'
+      HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup, http-log, webhook-log, websocket-log, query-log
+      HASURA_GRAPHQL_ENABLE_TELEMETRY: 'false'
+      HASURA_GRAPHQL_METADATA_DEFAULTS: "{\"backend_configs\":{\"dataconnector\":{\"a\
+        thena\":{\"uri\":\"http://data-connector-agent:8081/api/v1/athena\"},\"\
+        mariadb\":{\"uri\":\"http://data-connector-agent:8081/api/v1/mariadb\"},\"\
+        mysql8\":{\"uri\":\"http://data-connector-agent:8081/api/v1/mysql\"},\"\
+        oracle\":{\"uri\":\"http://data-connector-agent:8081/api/v1/oracle\"},\"\
+        snowflake\":{\"uri\":\"http://data-connector-agent:8081/api/v1/snowfl\
+        ake\"}}}}"
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://graphql-engine:8080/healthz']
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  # ── EVStation's own services ────────────────────────────────────────────
+  # Our PostGIS-enabled database. Deliberately a separate container from
+  # CitrineOS's `ocpp-db` (PRD section 4) with its own credentials. Row-level
+  # security policies land here from Phase 1 (packages/db).
+  our-db:
+    image: postgis/postgis:16-3.5
+    platform: linux/amd64
+    ports:
+      - 127.0.0.1:5432:5432
+    volumes:
+      # Geospatial support for later phases (station discovery, trip planning)
+      # is enabled at first init: see infra/compose/initdb/010-postgis.sql.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+      - our-db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: evstation
+      POSTGRES_USER: evstation
+      POSTGRES_PASSWORD: ${OUR_DB_PASSWORD:?set OUR_DB_PASSWORD in infra/compose/.env}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 5432 -U evstation -d evstation']
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  keycloak:
+    image: keycloak/keycloak:26.8.1
+    command: start-dev --import-realm
+    volumes:
+      - ./keycloak/evstation-realm.json:/opt/keycloak/data/import/evstation-realm.json:ro
+    environment:
+      # Bootstrap admin credentials come only from infra/compose/.env
+      # (dev-only values; see .env.example). Never committed.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:?set KC_BOOTSTRAP_ADMIN_USERNAME in infra/compose/.env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD in infra/compose/.env}
+    ports:
+      - 127.0.0.1:8180:8080 # HTTP (frontend + OIDC)
+      - 127.0.0.1:8181:9000 # management port (health metrics)
+    healthcheck:
+      # `bash` is available in the keycloak ubi image; TCP probe is
+      # free of endpoint-availability assumptions at this point.
+      test:
+        [
+          'CMD-SHELL',
+          'bash -c "exec 3<>/dev/tcp/127.0.0.1/8080 && printf \"GET /\\n\" >&3 && (grep -q \"HTTP\" <&3 || exit 1)"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+# Name the default network `citrineos` so it is stable and project-independent
+# (upstream convention, kept exactly).
+networks:
+  default:
+    name: citrineos
+
+volumes:
+  rabbitmq-data:
+  citrine-db-data:
+  our-db-data:

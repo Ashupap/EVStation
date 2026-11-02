@@ -24,7 +24,7 @@ Test-only constants are flagged where relevant:
   `.github/workflows`, which reads `.nvmrc`). Vitest is pinned to the latest
   stable 5.x at adoption time (`5.0.5`). pnpm is exactly pinned via
   `packageManager` (`pnpm@10.30.3`).
-- **Consequences.** "20+" from the PRD is superseded by an exact-hig∓er floor;
+- **Consequences.** "20+" from the PRD is superseded by an exact-higher floor;
   the PRD runtime line was updated accordingly. Environments running Node 20/22
   must upgrade before running this repo's scripts.
 
@@ -57,5 +57,80 @@ Test-only constants are flagged where relevant:
 
 ## Infrastructure
 
-(Infrastructure ADRs — CitrineOS pin, compose strategy, ports — are added with
-the commits that make them real.)
+### ADR-0004: CitrineOS pinned to v2.1.0, vendored compose, upstream checkout
+
+- **Context.** Contract rules forbid guessing CitrineOS ports/paths; CitrineOS
+  "API paths and ports differ between versions"; releases appear in
+  citrineos-core (the landing repo `citrineos/citrineos` has no releases).
+  The upstream compose binds 0.0.0.0 and floats `:latest`.
+- **Decision.**
+  - Pin **CitrineOS `v2.1.0` = `4fd7599b91c2fb6e6065e7c9b94be69880cced27`**
+    (2026-10-21). Verified during commit 4 that upstream `git ls-remote`
+    resolves `refs/tags/v2.1.0^{}` to that exact commit — all three sources
+    (upstream remote, local clone peel, `git describe`) agree. The pin is
+    machine-readable in `infra/compose/citrineos.json` and enforced by
+    `scripts/bootstrap-citrineos.mjs`, which **stops with an error** on any
+    mismatch (per instructions: never continue on a drifted pin).
+  - `third_party/citrineos-core` is a git-ignored **sparse checkout** of the
+    pinned tag (`--filter=blob:none --depth 1 --branch v2.1.0`); no CitrineOS
+    source is copied into this repository.
+  - `infra/compose/docker-compose.yml` **vendors** the upstream services
+    (`citrine`, `amqp-broker`, `ocpp-db`, `graphql-engine`, plus profile-gated
+    `citrine-ui`) with documented deviations only: exact image pins; ports
+    bound to 127.0.0.1; HTTP published at host 8088 (host 8080 occupied by an
+    unrelated pre-existing process) and UI at host 13000; `ocpp-db` on host
+    15432 (our DB owns 5432); named data volumes instead of upstream
+    repo-relative bind mounts; certificate-authority integrations left off.
+    Consistency with upstream is reviewed at every CitrineOS upgrade.
+  - At the pinned version the OCPP 1.6 entry path is:
+    `ws://localhost:8081/<station_id>` (security profile 0,
+    `allowUnknownChargingStations: true`); stations need pre-registered
+    Location → ChargingStation → EVSE → Connector → Authorization records
+    (per `apps/operator-ui` README at the pin), and `StartTransaction`
+    requires the idTag to exist exactly once in `Authorizations` with status
+    `Accepted`.
+- **Consequences.** Upgrades = change `citrineos.json` + re-diff the vendored
+  services against the new upstream compose + regenerate smoke fixtures. The
+  8080→8088 host remap applies to local dev on this host; other hosts may map
+  8080 back (upstream value) unless that port is occupied there too.
+
+### ADR-0005: Exact-pinned dev-stack image tags
+
+| Component                                   | Image (tag notes via ADR-0003)                                                                                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CitrineOS server                            | `ghcr.io/citrineos/citrineos-server:v2.1.0`                                                                                                                                                 |
+| CitrineOS Operator UI (optional ui profile) | `ghcr.io/citrineos/citrineos-operator-ui:v2.1.0`                                                                                                                                            |
+| Our database (and CitrineOS's own)          | `postgis/postgis:16-3.5` — PostGIS 16 exact line used by upstream for `ocpp-db`; same image for ours keeps one supported geospatial stack (station discovery / trip planning need it later) |
+| Keycloak                                    | `keycloak/keycloak:26.8.1` — newest 26.x.y on Docker Hub at adoption (2026-11-02)                                                                                                           |
+| Hasura                                      | `hasura/graphql-engine:v2.40.3.cli-migrations-v3` (upstream pin kept)                                                                                                                       |
+| RabbitMQ                                    | `rabbitmq:3.13.7-management` (newest exact 3.x patch released upstream)                                                                                                                     |
+
+- **Consequences.** Every image upgrade is a deliberate, reviewable commit.
+  Keycloak runs `start-dev` (dev profile) with an embedded non-persistent
+  database and imports the committed realm on each start; Phase 1 moves
+  Keycloak onto our Postgres and out of dev mode.
+
+### ADR-0006: Keycloak realm "evstation" — public `dashboard` client only
+
+- **Context.** PRD Phase 0: self-hosted Keycloak with a committed realm.
+- **Decision.** Committed realm JSON (`infra/compose/keycloak/
+evstation-realm.json`) declares realm `evstation` with one public client
+  `dashboard`: Authorization Code + PKCE enforced (`pkce.code.challenge.method: S256`
+  attribute), no client secret, `directAccessGrantsEnabled: false`,
+  redirect URIs limited to `http://localhost:3000/*` and web origin
+  `http://localhost:3000` (Phase 1 may extend to other localhost ports
+  explicitly). Realm import via `--import-realm` mounted at
+  `/opt/keycloak/data/import/`. Bootstrap admin credentials come from
+  `infra/compose/.env` (never committed). No users are seeded in Phase 0.
+- **Consequences.** Phase 1 adds a realm seed script (users, realm roles,
+  claims) and moves Keycloak to `start` (production mode) backed by our
+  Postgres.
+
+### Test-only fixtures
+
+- `cp001` (station id) and `DEADBEEF` (RFID idTag) are smoke-test fixtures
+  chosen to match the upstream operator-ui/EVerest defaults (reduces setup
+  risk for throwaway data). **They are test-only and must never be used in a
+  real environment.** Both are configurable via env vars/flags in the smoke
+  test and simulator. Phase 2 defines the production station naming
+  convention.

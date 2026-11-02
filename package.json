@@ -15,6 +15,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "install:ci": "pnpm install --frozen-lockfile",
+    "dev:bootstrap": "node scripts/bootstrap-citrineos.mjs",
+    "dev:stack": "pnpm dev:bootstrap && node scripts/dev-stack.mjs up",
+    "dev:stack:down": "node scripts/dev-stack.mjs down",
+    "dev:stack:logs": "node scripts/dev-stack.mjs logs",
     "prepare": "husky"
   },
   "devDependencies": {
