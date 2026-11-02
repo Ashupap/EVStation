@@ -77,9 +77,9 @@ Test-only constants are flagged where relevant:
   - `infra/compose/docker-compose.yml` **vendors** the upstream services
     (`citrine`, `amqp-broker`, `ocpp-db`, `graphql-engine`, plus profile-gated
     `citrine-ui`) with documented deviations only: exact image pins; ports
-    bound to 127.0.0.1; HTTP published at host 8088 (host 8080 occupied by an
-    unrelated pre-existing process) and UI at host 13000; `ocpp-db` on host
-    15432 (our DB owns 5432); named data volumes instead of upstream
+    bound to 127.0.0.1; HTTP published at host 8088 and the UI at host 13000
+    (ports 8080/3000 are permanently reserved — see ADR-0007); `ocpp-db` on
+    host 15432 (our DB owns 5432); named data volumes instead of upstream
     repo-relative bind mounts; certificate-authority integrations left off.
     Consistency with upstream is reviewed at every CitrineOS upgrade.
   - At the pinned version the OCPP 1.6 entry path is:
@@ -90,9 +90,10 @@ Test-only constants are flagged where relevant:
     requires the idTag to exist exactly once in `Authorizations` with status
     `Accepted`.
 - **Consequences.** Upgrades = change `citrineos.json` + re-diff the vendored
-  services against the new upstream compose + regenerate smoke fixtures. The
-  8080→8088 host remap applies to local dev on this host; other hosts may map
-  8080 back (upstream value) unless that port is occupied there too.
+  services against the new upstream compose (procedure in ADR-0008) +
+  regenerate smoke fixtures. The 8080→8088 host mapping is the standing
+  default for local dev (ADR-0007); other hosts may map 8080 back (upstream
+  value) if that port is genuinely free there.
 
 ### ADR-0005: Exact-pinned dev-stack image tags
 
@@ -117,11 +118,12 @@ Test-only constants are flagged where relevant:
 evstation-realm.json`) declares realm `evstation` with one public client
   `dashboard`: Authorization Code + PKCE enforced (`pkce.code.challenge.method: S256`
   attribute), no client secret, `directAccessGrantsEnabled: false`,
-  redirect URIs limited to `http://localhost:3000/*` and web origin
-  `http://localhost:3000` (Phase 1 may extend to other localhost ports
-  explicitly). Realm import via `--import-realm` mounted at
-  `/opt/keycloak/data/import/`. Bootstrap admin credentials come from
-  `infra/compose/.env` (never committed). No users are seeded in Phase 0.
+  redirect URIs limited to `http://localhost:3200/*` and web origin
+  `http://localhost:3200` (dashboard dev port, ADR-0007; Phase 1 may extend
+  to other localhost ports explicitly). Realm import via `--import-realm`
+  mounted at `/opt/keycloak/data/import/`. Bootstrap admin credentials come
+  from `infra/compose/.env` (never committed). No users are seeded in
+  Phase 0.
 - **Consequences.** Phase 1 adds a realm seed script (users, realm roles,
   claims) and moves Keycloak to `start` (production mode) backed by our
   Postgres.
@@ -134,3 +136,30 @@ evstation-realm.json`) declares realm `evstation` with one public client
   real environment.** Both are configurable via env vars/flags in the smoke
   test and simulator. Phase 2 defines the production station naming
   convention.
+
+### ADR-0007: Dev port map — defaults, configurability, reserved ports
+
+- **Context.** Ports 8080 and 3000 are permanently reserved on the
+  development hosts using this template (occupied there for good; never
+  defaults anywhere in this repository). Runtime ports must be stable for
+  scripts and docs, but a few surface host ports should be adjustable in
+  restricted environments.
+- **Decision.** Host-port defaults (configurable via `infra/compose/.env`,
+  pre-checked by `pnpm dev:stack`):
+  - `CITRINE_HTTP_HOST_PORT` = **8088** → CitrineOS HTTP + Swagger
+    (container stays 8080; OCPP WebSocket ports keep upstream 8081/8082).
+  - `OUR_DB_HOST_PORT` = **5432** → our PostGIS database.
+  - `KEYCLOAK_HTTP_HOST_PORT` = **8180** (container 8080) and
+    `KEYCLOAK_MGMT_HOST_PORT` = **8181** (container 9000).
+  - EVStation **dashboard dev port = 3200**, EVStation **API dev port =
+    4000** — _reserved from Phase 0_ (set in the app `.env.example` files;
+    not in the compose stack yet). Changing the dashboard port requires
+    changing the Keycloak realm redirect URIs/web origins too (documented in
+    the RUNBOOK "Changing dev ports").
+  - Deliberately fixed (so scripts/docs can rely on them): OCPP WebSocket
+    8081/8082/8443/8444, debugger 9229, ocpp-db 15432, Hasura 8090,
+    RabbitMQ 5672/15672, Operator UI 13000 (only behind the `ui` profile).
+- **Consequences.** Any host port conflict now fails fast _before_ compose
+  runs, naming the port, the variable to change, and the file to change it
+  in. Nothing is ever killed automatically. 8080/3000 remain untouched by
+  this stack on every host.

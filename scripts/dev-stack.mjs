@@ -12,6 +12,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -65,16 +66,116 @@ function ensureEnv() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Port availability pre-check (ADR-0007): fail fast with an actionable
+// message when any host port we are about to bind is already taken. We never
+// kill processes; the operator stops the conflicting process or changes the
+// variable. Ports 8080/3000 are permanently reserved on this host and are
+// NOT checked (the stack must not bind them anywhere).
+// ---------------------------------------------------------------------------
+
+function readEnvFile() {
+  const vars = {};
+  if (!fs.existsSync(envFile)) return vars;
+  for (const line of fs.readFileSync(envFile, 'utf8').split('\n')) {
+    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m) vars[m[1]] = m[2].trim();
+  }
+  return vars;
+}
+
+const CONFIGURABLE_PORT_VARS = [
+  ['OUR_DB_HOST_PORT', 'our PostGIS database'],
+  ['KEYCLOAK_HTTP_HOST_PORT', 'Keycloak HTTP'],
+  ['KEYCLOAK_MGMT_HOST_PORT', 'Keycloak management'],
+  ['CITRINE_HTTP_HOST_PORT', 'CitrineOS HTTP + Swagger'],
+];
+
+const FIXED_HOST_PORTS = [
+  [8081, 'CitrineOS OCPP WebSocket profile 0 (no auth)'],
+  [8082, 'CitrineOS OCPP WebSocket profile 1'],
+  [8443, 'CitrineOS OCPP WebSocket profile 2 (TLS)'],
+  [8444, 'CitrineOS OCPP WebSocket profile 3 (mTLS)'],
+  [9229, 'CitrineOS Node.js debugger'],
+  [15432, "CitrineOS's own database (ocpp-db)"],
+  [8090, 'Hasura GraphQL engine'],
+  [5672, 'RabbitMQ AMQP'],
+  [15672, 'RabbitMQ management'],
+];
+
+function portAvailable(port) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const done = (ok) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(750);
+    socket.once('connect', () => done(false));
+    socket.once('timeout', () => done(true));
+    socket.once('error', () => done(true));
+    socket.connect(port, '127.0.0.1');
+  });
+}
+
+async function checkHostPorts(wantUi) {
+  const vars = readEnvFile();
+  const problems = [];
+  for (const [name, what] of CONFIGURABLE_PORT_VARS) {
+    const port = Number.parseInt(vars[name], 10);
+    if (!Number.isInteger(port)) continue; // compose uses its default
+    if (await portAvailable(port)) continue;
+    problems.push(
+      `  host port ${port} (${what}) is already in use — set ${name}=<free port> in infra/compose/.env (see docs/RUNBOOK.md)`,
+    );
+  }
+  for (const [port, what] of FIXED_HOST_PORTS) {
+    if (await portAvailable(port)) continue;
+    problems.push(
+      `  host port ${port} (${what}) is already in use — it is a fixed ` +
+        `mapping in infra/compose/docker-compose.yml; stop the conflicting ` +
+        `process (never kill it ourselves) or edit the mapping there`,
+    );
+  }
+  if (wantUi) {
+    if (!(await portAvailable(13000))) {
+      problems.push(
+        '  host port 13000 (CitrineOS Operator UI) is already in use — fixed mapping in infra/compose/docker-compose.yml',
+      );
+    }
+  }
+  const reserves =
+    '  (informational: 3200 dashboard and 4000 API are reserved for Phase 1; ' +
+    '8080/3000 are permanently reserved on this host and never used here)';
+  if (problems.length) {
+    console.error('dev-stack: PORT CONFLICT(S) — nothing started:');
+    for (const p of problems) console.error(p);
+    console.error(reserves);
+    process.exit(1);
+  }
+  console.log('dev-stack: port pre-check OK (all published host ports free)');
+  console.log(reserves);
+}
+
+async function stackRunning() {
+  const r = spawnSync('docker', composeArgs(['ps', '--status=running', '-q']), {
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  if (r.status !== 0) return false;
+  return r.stdout.toString().trim().length > 0;
+}
+
 switch (command) {
   case 'up': {
     ensureEnv();
     // Validate the merged config before touching Docker.
     spawnSync('docker', composeArgs(['config', '--quiet']), { stdio: 'inherit' });
-    if (process.env.VERBOSE !== '1') {
-      // Silence nothing by default; config above surfaces errors with context.
+    if (!(await stackRunning())) {
+      await checkHostPorts(args.includes('--ui'));
     }
     console.log('dev-stack: starting stack (images pull on first run)…');
-    runCompose(['up', '-d', '--wait', '--wait-timeout', '600']);
+    const upExtra = args.includes('--ui') ? ['--profile', 'ui'] : [];
+    runCompose(['up', '-d', '--wait', '--wait-timeout', '600', ...upExtra]);
     console.log('dev-stack: stack is up. See docs/RUNBOOK.md for the port map.');
     break;
   }

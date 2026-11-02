@@ -32,19 +32,40 @@ Windows/macOS should work through Docker Desktop but are unverified.
   8090  Hasura GraphQL engine
   5672  RabbitMQ AMQP                15672  RabbitMQ management UI
  13000  CitrineOS Operator UI        (profile `ui`, off by default; container 3000)
+  3200  EVStation dashboard (Phase 1)         reserved — not in the stack yet
+  4000  EVStation API service (Phase 1)       reserved — not in the stack yet
 ```
 
-⚠ **Port deviations from upstream CitrineOS** (recorded in ADR-0005): on this
-development host something already listens on **8080** and **3000**, so the
-CitrineOS HTTP surface is published at **8088** and the Operator UI at
-**13000** (only relevant when the `ui` profile is enabled). The OCPP
-WebSocket port **8081 keeps the documented upstream value** — the charger
-simulator connects to `ws://localhost:8081/<station_id>`, exactly as the
-CitrineOS docs describe. Inside the docker network the CitrineOS container
-still serves 8080, so CitrineOS's own docs, healthchecks and URLs are
-unchanged; only the host mapping differs.
+⚠ **Reserved ports (permanently, on every dev host using this template) —
+never used as defaults anywhere:**
 
-Swagger therefore sits at <http://localhost:8088/docs> on this host.
+- **8080** and **3000** are reserved for other purposes (they are occupied on
+  this dev host as well). The stack's port pre-check (`pnpm dev:stack`) never
+  binds them and never checks them; the CitrineOS HTTP surface defaults to
+  **8088**, the Operator UI to **13000**, only relevant when the `ui` profile
+  is enabled.
+- The OCPP WebSocket port **8081 keeps the documented upstream value** — the
+  charger simulator connects to `ws://localhost:8081/<station_id>`, exactly
+  as the CitrineOS docs describe. Inside the docker network the CitrineOS
+  container still serves 8080, so CitrineOS's own docs, healthchecks and
+  URLs are unchanged; only host mappings differ.
+
+**Configurable host ports** (in `infra/compose/.env`, defaults below):
+`CITRINE_HTTP_HOST_PORT` (8088), `OUR_DB_HOST_PORT` (5432),
+`KEYCLOAK_HTTP_HOST_PORT` (8180), `KEYCLOAK_MGMT_HOST_PORT` (8181).
+Everything else is deliberately pinned so scripts/docs can rely on it.
+
+**Changing dev ports** (dashboard example): if the dashboard dev port (3200)
+changes, change it in _both_ places so it stays consistent:
+
+1. `apps/dashboard/.env.example` (`PORT`) — and your local `.env.local`;
+2. the Keycloak realm client in `infra/compose/keycloak/evstation-realm.json`
+   (`redirectUris` + `webOrigins` must point at the new `http://localhost:<port>/*`),
+   then recreate Keycloak so the realm re-imports:
+   `docker compose --project-name evstation --project-directory infra/compose
+--env-file infra/compose/.env -f infra/compose/docker-compose.yml up -d --force-recreate keycloak`.
+
+The API service (4000) lives only in `apps/api/.env.example` today.
 
 ## Setup
 
@@ -55,9 +76,12 @@ pnpm dev:bootstrap    # idempotent: sparse-clones CitrineOS v2.1.0 into third_pa
 pnpm dev:stack        # one command: bootstrap check + full stack up (+ health waits)
 ```
 
-`pnpm dev:stack` creates `infra/compose/.env` from `.env.example` on first run
-(dev-only values), then runs `docker compose up -d --wait`. First start pulls
-images (≈1 GB) and runs CitrineOS Sequelize migrations; allow a few minutes.
+`pnpm dev:stack` creates `infra/compose/.env` on first run (follow-up commit a
+generates random dev secrets), runs the **port pre-check** (fail-fast, with
+the variable to change on conflict), then `docker compose up -d --wait`.
+First start pulls images (≈1 GB) and runs CitrineOS Sequelize migrations;
+allow a few minutes. The check runs only when the stack is not already
+running; ports 8080/3000 are skipped deliberately (reserved).
 
 ## Start / stop
 
@@ -85,15 +109,22 @@ stop citrine` — prefer the pnpm commands unless you have a reason.
 - CitrineOS's Postgres (read-mostly; used by the smoke test to verify
   records): `postgresql://citrine:citrine@localhost:15432/citrine`
 - Hasura console (upstream CitrineOS data API): <http://localhost:8090>
-  ⚠ running unauthenticated by upstream's compose default — local only.
+  ⚠ protected by `HASURA_ADMIN_SECRET` from `infra/compose/.env` in this
+  repository's overlay; scripts always read the secret from that env file.
+  Never expose 8090 beyond 127.0.0.1.
+- EVStation dashboard (Phase 1): dev port **3200**; API service (Phase 1): dev
+  port **4000** — both reserved now, configured via their app `.env.example`.
 
 ## Troubleshooting
 
 - **`git ls-remote` fails in `dev:bootstrap`** — no network to GitHub, or a
   corporate proxy. The bootstrap refuses to proceed on any tag/commit
   mismatch on purpose (see ADR-0004).
-- **Port 8080/3000 already in use at `docker compose up`** — expected on this
-  host; those ports are not used by the stack (see the port map deviations).
+- **Port already in use at `docker compose up`** — the pre-check names the
+  port, the variable to change (configurable ports live in
+  `infra/compose/.env`), or points to the fixed mapping in
+  `infra/compose/docker-compose.yml`. Ports 8080/3000 are reserved and never
+  bound by this stack. Nothing is ever killed automatically.
 - **CitrineOS unhealthy** — `pnpm dev:stack:logs citrine`; the first boot runs
   migrations, which can take minutes on slow disks.
 - **Keycloak reports transport 8080 refusals in healthcheck** — Keycloak

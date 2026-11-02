@@ -8,11 +8,12 @@
 #
 #   1. Image tags pinned: upstream `:latest` → `:v2.1.0` (exact pin policy).
 #   2. All published ports bound to 127.0.0.1 (upstream binds 0.0.0.0).
-#   3. CitrineOS HTTP published on host 8088 (not 8080) and the Operator UI on
-#      host 13000 (not 3000): this development host already runs unrelated
-#      services on 8080 and 3000. Container-side ports are unchanged, and the
-#      OCPP WebSocket ports (8081/8082) keep the documented upstream values.
+#   3. CitrineOS HTTP published on host 8088 and the Operator UI on
+#      host 13000: ports 8080 and 3000 are permanently reserved on this host
+#      (ADR-0007). Container-side ports are unchanged, and the OCPP WebSocket
+#      ports (8081/8082) keep the documented upstream values.
 #   4. ocpp-db published on host 15432 (not 5432): our own database uses 5432.
+#      Our database's host port is configurable via OUR_DB_HOST_PORT.
 #   5. postgres/rabbitmq data live in named volumes instead of the upstream
 #      repo-relative bind mounts, so nothing is written into third_party/.
 #   6. The certificate-authority integrations (Hubject v2gCA, charging-station
@@ -22,6 +23,17 @@
 #
 # Deviations are recorded in docs/DECISIONS.md and the port map lives in
 # docs/RUNBOOK.md.
+#
+# Host-port policy (ADR-0007): this host permanently reserves 8080 and 3000
+# for other purposes — they are never used as defaults anywhere in this
+# repository. Configurable host ports (infra/compose/.env):
+#   CITRINE_HTTP_HOST_PORT (default 8088)   CitrineOS HTTP + Swagger
+#   OUR_DB_HOST_PORT       (default 5432)   our PostGIS database
+#   KEYCLOAK_HTTP_HOST_PORT (default 8180)  Keycloak HTTP
+#   KEYCLOAK_MGMT_HOST_PORT (default 8181)  Keycloak management port
+# All other published host ports are pinned (8081/8082/8443/8444/9229,
+# 15432, 8090, 5672/15672, and 13000 for the optional Operator UI profile)
+# so that scripts and docs can rely on them.
 name: evstation
 
 x-citrine-cas-enabled:
@@ -62,8 +74,8 @@ services:
       amqp-broker:
         condition: service_healthy
     ports:
-      # HTTP + Swagger docs — container 8080 stays upstream; host moved (see header note 3).
-      - 127.0.0.1:8088:8080
+      # HTTP + Swagger docs — container 8080 stays upstream; host port configurable.
+      - 127.0.0.1:${CITRINE_HTTP_HOST_PORT:-8088}:8080
       # OCPP WebSocket servers — upstream paths/ports.
       - 127.0.0.1:8081:8081 # security profile 0 (no auth)
       - 127.0.0.1:8082:8082 # security profile 1 (basic HTTP auth)
@@ -92,7 +104,7 @@ services:
     env_file:
       - ../../third_party/citrineos-core/apps/operator-ui/.env.local
     ports:
-      # Host moved to 13000: this host already runs something on 3000 (header note 3).
+      # Host 13000: 3000 is permanently reserved on this host (header note 3).
       - 127.0.0.1:13000:3000
     depends_on:
       citrine:
@@ -122,7 +134,7 @@ services:
     image: postgis/postgis:16-3.5
     platform: linux/amd64
     ports:
-      # Host remapped 5432 → 15432: our own database owns 5432 (header note 4).
+      # Host 15432: 5432 is our own database's host port (header note 4).
       - 127.0.0.1:15432:5432
     volumes:
       # Named volume instead of the upstream repo-relative bind mount (header note 5).
@@ -176,7 +188,7 @@ services:
     image: postgis/postgis:16-3.5
     platform: linux/amd64
     ports:
-      - 127.0.0.1:5432:5432
+      - 127.0.0.1:${OUR_DB_HOST_PORT:-5432}:5432
     volumes:
       # Geospatial support for later phases (station discovery, trip planning)
       # is enabled at first init: see infra/compose/initdb/010-postgis.sql.
@@ -204,8 +216,8 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:?set KC_BOOTSTRAP_ADMIN_USERNAME in infra/compose/.env}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD in infra/compose/.env}
     ports:
-      - 127.0.0.1:8180:8080 # HTTP (frontend + OIDC)
-      - 127.0.0.1:8181:9000 # management port (health metrics)
+      - 127.0.0.1:${KEYCLOAK_HTTP_HOST_PORT:-8180}:8080 # HTTP (frontend + OIDC)
+      - 127.0.0.1:${KEYCLOAK_MGMT_HOST_PORT:-8181}:9000 # management port (health metrics)
     healthcheck:
       # `bash` is available in the keycloak ubi image; TCP probe is
       # free of endpoint-availability assumptions at this point.
