@@ -1,0 +1,2 @@
+# Node.js version used by CI and local dev (Node 20 LTS per PRD)
+20.20.1

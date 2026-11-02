@@ -1,0 +1,13 @@
+{
+  "name": "evstation",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "description": "EV charging Central Management System (CMS) for India, built on CitrineOS.",
+  "repository": {
+    "type": "git",
+    "private": true
+  }
+}

@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+.next/
+out/
+
+# Test artifacts
+coverage/
+
+# Environment files (committed templates only)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Upstream checkout of CitrineOS pinned by dev:bootstrap (see infra/compose)
+third_party/
+
+# Local stack data volumes created by Docker Compose bind mounts
+data/
+infra/compose/keycloak/data/
+
+# Editor / OS
+.DS_Store
+.idea/
+
+# Logs
+*.log
+
+# Vitest
+.vitest-cache/
