@@ -128,6 +128,45 @@ evstation-realm.json`) declares realm `evstation` with one public client
   claims) and moves Keycloak to `start` (production mode) backed by our
   Postgres.
 
+### ADR-0008: CitrineOS API authentication at the pin — `localDev` is dev-only
+
+- **Context.** At v2.1.0, `CITRINEOS_AUTH_MODE` selects CitrineOS's HTTP API
+  authentication (apps/ocpp-server README at the pin). The stack currently
+  runs the default **`localDev`** mode: tokens are minted by the server
+  itself from an ephemeral startup keypair, handed out by `POST /dev/token`
+  (roles requested in the body; flat claim paths required). `localDev` is
+  refused automatically when `env=production`, and the default `localBypass`
+  mode disables enforcement entirely — both must never see a shared
+  environment.
+- **Decision.**
+  - `localDev` (+ `POST /dev/token`) and `localBypass` are **local-dev only**
+    (127.0.0.1-bound stack). The adapter and scripts may use `POST /dev/token`
+    locally while that is the configured mode; no code may assume these
+    endpoints exist outside local dev.
+  - Shared/staging/production must run `auth.mode: jwt`: tokens are Bearer
+    JWTs verified against the Identity Provider's JWKS with an exact `issuer`
+    match, configurable claim paths (`rolesClaim`, `tenantClaim`) and an
+    optional `audience`; signing-key curl-mode is implicit; role grants are
+    resolved by name from the roles seed file (`roles-seed.json`, re-read on
+    an interval).
+  - **Phase 2 expectation (moderately sure, to be confirmed in Phase 1
+    planning):** bind CitrineOS to Keycloak — `jwt` mode with
+    `jwksUri=https://<keycloak>/realms/evstation/protocol/openid-connect/certs`,
+    `issuer=https://<keycloak>/realms/evstation`, and realm roles carried in
+    mapped claims. How CitrineOS _tenants_ map onto our tenant model (the
+    claim → tenant id question) is not yet decided — Phase 1 outputs the
+    mapping, Phase 2 wires it; explicitly unresolved here.
+  - **Upgrade items scored against this ADR** (tracked until fixed):
+    (1) before anything beyond localhost is exposed, switch off `localDev`
+    and set `jwt` with real Keycloak (gate: Phase 5 hardening, or earlier if
+    the stack becomes multi-host); (2) the operator-UI `keycloak-auth-provider`
+    exists in the upstream pin, but its Hasura/JWT claims wiring is untested
+    by us.
+- **Consequences.** Nothing depends on `/dev/token` or on token _content_
+  beyond role names today; Phase 2's adapter only needs a Bearer token
+  factory behind one interface. ADRs gain a checklist item: verify
+  `CITRINEOS_AUTH_MODE` in any environment definition.
+
 ### Test-only fixtures
 
 - `cp001` (station id) and `DEADBEEF` (RFID idTag) are smoke-test fixtures
