@@ -22,7 +22,9 @@
     "dev:stack": "pnpm dev:bootstrap && node scripts/dev-stack.mjs up",
     "dev:stack:down": "node scripts/dev-stack.mjs down",
     "dev:stack:logs": "node scripts/dev-stack.mjs logs",
-    "prepare": "husky"
+    "prepare": "husky",
+    "db:roles": "node packages/db/scripts/roles.mjs",
+    "db:migrate": "node packages/db/scripts/migrate.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

@@ -398,6 +398,13 @@ CASCADE`); a deferred constraint trigger requires site managers to have
   transaction** because the request transaction may roll back. A fully
   compromised API process can still set GUCs — RLS protects against API bugs,
   not a hostile server; this trust boundary is accepted.
+- **Migration execution.** Schema/function DDL runs through `pnpm db:migrate`
+  connected as the container superuser (`evstation`), while every schema
+  object is explicitly owned by `evstation_owner` (`SET ROLE` in the SQL
+  file). The owner role stays `NOBYPASSRLS` and is never granted membership
+  in `evstation_definer`, so it cannot `SET ROLE` into the BYPASSRLS role;
+  superuser is required only to create the definer-owned functions and the
+  roles themselves. The API runtime never uses the superuser or owner URL.
 
 ### ADR-0012: API authentication and tenant resolution
 
