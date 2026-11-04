@@ -207,3 +207,11 @@ passes in CI. Nothing hard-gates a local-only deployment slice.
   `python3 -m venv .venv && .venv/bin/pip install -r tools/simulator/requirements.txt`
   (pinned exact versions, incl. `websockets==16.1.1`), or point `SIM_PYTHON`
   at an existing interpreter. See `tools/simulator/README.md`.
+- **`pnpm smoke` gets `ConcurrentTx` (transactionId 0) at
+  `StartTransaction`** — an earlier session was interrupted before
+  `StopTransaction` (Ctrl-C mid-smoke), leaving transaction open on
+  `cp001/connector 1`. Either stop that transaction (`Transactions.isActive
+= true`, no `endTime`; send a `StopTransaction` OCPP call or update it via
+  the local Hasura console), or reset state with
+  `pnpm dev:stack:down --volumes && pnpm dev:stack` followed by `pnpm smoke`
+  (fixtures are recreated automatically).
