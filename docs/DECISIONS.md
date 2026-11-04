@@ -405,6 +405,10 @@ CASCADE`); a deferred constraint trigger requires site managers to have
   in `evstation_definer`, so it cannot `SET ROLE` into the BYPASSRLS role;
   superuser is required only to create the definer-owned functions and the
   roles themselves. The API runtime never uses the superuser or owner URL.
+  BYPASSRLS bypasses policies but **not** table privileges, so the definer
+  role receives explicit `SELECT` grants (plus the specific `INSERT`/`UPDATE`
+  grants `accept_invitation` needs); the `SECURITY DEFINER` helpers therefore
+  cannot be used to reach tables the definer was not granted.
 
 ### ADR-0012: API authentication and tenant resolution
 
