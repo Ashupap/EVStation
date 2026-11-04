@@ -182,8 +182,11 @@ false` at minimum, or removed from the file — see the pinned version's
 4. Keycloak part of the same change set: ADR-0008 (`jwt` mode instead of the
    `localDev` HTTP API auth).
 
-Tracked as hardening output for Phase 5; nothing hard-gates it before a real
-deployment slice.
+**This is a Phase 0 known-issue BLOCKER for any non-local deployment** (see
+"Known issues" in DECISIONS.md): do not expose this stack beyond a developer
+host — shared/staging/production or any network reachable by real chargers —
+until steps 1–4 are done and the Phase 1 unknown-station rejection test
+passes in CI. Nothing hard-gates a local-only deployment slice.
 
 ## Troubleshooting
 

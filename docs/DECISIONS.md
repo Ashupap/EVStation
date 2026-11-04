@@ -236,9 +236,19 @@ evstation-realm.json`) declares realm `evstation` with one public client
    tracks the swap to `jwt`/Keycloak before any shared environment.
 5. The dashboard/API packages are placeholders: ports 3200/4000 reserved
    (ADR-0007) but no code wired yet (Phase 1).
-6. The OCPP WebSocket server runs with `allowUnknownChargingStations: true`
-   at the pin; production tightening is documented in the RUNBOOK's
-   "OCPP WebSocket exposure" section.
+6. **BLOCKER for any non-local deployment:** the OCPP WebSocket server runs
+   with `allowUnknownChargingStations: true` at the pin, and profile 0
+   (no auth) is bound on `:8081`. Any deployment that is not a developer
+   laptop (shared/staging/production, or any host reachable by real chargers)
+   must not ship until this is flipped to `false` with commissioned stations
+   and an authenticated profile (basic auth or TLS/mTLS) — see the RUNBOOK's
+   "OCPP WebSocket exposure" section for the hardening checklist.
+   **Phase 1 test:** a CI job boots a production-like OCPP config
+   (`allowUnknownChargingStations: false`, profile 1+ only), attempts a
+   WebSocket connection with an unregistered station id and asserts the
+   connection is refused (upgrade rejected/closed, no BootNotification
+   accepted), then asserts a commissioned station still connects and boots
+   `Accepted`.
 
 ### ADR-0007: Dev port map — defaults, configurability, reserved ports
 

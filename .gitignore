@@ -30,6 +30,8 @@ infra/compose/keycloak/data/
 
 # Logs
 *.log
+# ...except checked-in evidence logs (secrets must be redacted before committing)
+!docs/evidence/*.log
 
 # Vitest
 .vitest-cache/

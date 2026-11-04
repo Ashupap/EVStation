@@ -1,0 +1,29 @@
+Connecting to ws://localhost:8081/cp001 ...
+WebSocket connected (id=cp001, id_tag=DEADBEEF).
+
+--> [2, "25bc09c1-7fa1-4956-9821-9477bb3e4753", "BootNotification", {"chargePointVendor": "DemoVendor", "chargePointModel": "SIM-60", "chargePointSerialNumber": "cp001", "firmwareVersion": "1.0.0"}]
+<-- [3,"25bc09c1-7fa1-4956-9821-9477bb3e4753",{"currentTime":"2026-11-04T12:53:32.543Z","status":"Accepted","interval":60}]
+    assert OK  BootNotification.status == 'Accepted'
+--> [2, "567a2bad-8abb-428b-ac4b-c27a4623ac0e", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Available", "timestamp": "2026-11-04T12:53:32.000Z"}]
+<-- [3,"567a2bad-8abb-428b-ac4b-c27a4623ac0e",{}]
+--> [2, "e92f24e2-80b6-4017-abd0-04b1f274433f", "Authorize", {"idTag": "DEADBEEF"}]
+<-- [3,"e92f24e2-80b6-4017-abd0-04b1f274433f",{"idTagInfo":{"status":"Accepted"}}]
+    assert OK  Authorize.idTagInfo.status == 'Accepted'
+--> [2, "863a8641-f731-4bcb-9973-478fe2cd2d04", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Preparing", "timestamp": "2026-11-04T12:53:32.000Z"}]
+<-- [3,"863a8641-f731-4bcb-9973-478fe2cd2d04",{}]
+--> [2, "8e790d72-89b0-45bb-b480-5dadc268ead8", "StartTransaction", {"connectorId": 1, "idTag": "DEADBEEF", "meterStart": 0, "timestamp": "2026-11-04T12:53:32.000Z"}]
+<-- [3,"8e790d72-89b0-45bb-b480-5dadc268ead8",{"idTagInfo":{"status":"Accepted"},"transactionId":8}]
+--> [2, "a09d1800-fd8f-4ef3-81ab-2d539aed9acf", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Charging", "timestamp": "2026-11-04T12:53:32.000Z"}]
+<-- [3,"a09d1800-fd8f-4ef3-81ab-2d539aed9acf",{}]
+--> [2, "65772195-b275-494b-9c1c-9a93020378f7", "MeterValues", {"connectorId": 1, "transactionId": 8, "meterValue": [{"timestamp": "2026-11-04T12:53:37.000Z", "sampledValue": [{"value": "250", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"65772195-b275-494b-9c1c-9a93020378f7",{}]
+--> [2, "869c694b-a41b-4e3a-bdf7-0fd5ac600899", "MeterValues", {"connectorId": 1, "transactionId": 8, "meterValue": [{"timestamp": "2026-11-04T12:53:43.000Z", "sampledValue": [{"value": "500", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"869c694b-a41b-4e3a-bdf7-0fd5ac600899",{}]
+--> [2, "d746cc7d-ba4b-4efd-94a7-5eec0d02c0e8", "MeterValues", {"connectorId": 1, "transactionId": 8, "meterValue": [{"timestamp": "2026-11-04T12:53:48.000Z", "sampledValue": [{"value": "750", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"d746cc7d-ba4b-4efd-94a7-5eec0d02c0e8",{}]
+--> [2, "f1e20a81-6434-4cb5-98c4-a3a5a505ed33", "StopTransaction", {"transactionId": 8, "idTag": "DEADBEEF", "meterStop": 750, "timestamp": "2026-11-04T12:53:48.000Z", "reason": "Local"}]
+<-- [3,"f1e20a81-6434-4cb5-98c4-a3a5a505ed33",{"idTagInfo":{"status":"Accepted"}}]
+--> [2, "920362b5-e26f-4170-8464-910b11cb2a01", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Available", "timestamp": "2026-11-04T12:53:48.000Z"}]
+<-- [3,"920362b5-e26f-4170-8464-910b11cb2a01",{}]
+
+Session complete; exiting cleanly (--exit-after-session).
