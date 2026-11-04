@@ -107,6 +107,30 @@ probes are independent of the compose healthchecks. Machine-readable output:
 `node scripts/health.mjs --json` (call node directly — `pnpm` prepends a
 banner to stdout). Secrets are never printed by the script.
 
+> Note: the DB probes (5432, 15432, 5672) and the WebSocket probe (8081) are
+> **TCP reachability only** — they cannot see whether the services hold
+> valid schema/state or accept an OCPP session. The **smoke test is the real
+> end-to-end proof**: it boots a station, authorizes, starts and stops a
+> transaction, and verifies _this run's_ record in ocpp-db.
+
+## Smoke test (Phase 0 end-to-end proof)
+
+```shell
+pnpm smoke    # fixtures upsert → OCPP 1.6 session (tools/simulator) → verify transaction
+```
+
+Passes (exit 0) only when: the station `cp001` is found/created with its
+EVSE/connector and the `DEADBEEF` idTag (status `Accepted`) — **upserted,
+never duplicated**; the simulator completes a full session (`--exit-after-session`);
+and exactly one transaction row appears for _this run's_
+server-assigned `transactionId`, attributed to station/connector/authorization
+with recorded kWh and a stop time. Idempotency requirements are part of the
+test contract: pass on a fresh volume, twice in a row uncleaned, and after
+the simulator has already run (fixture `no-duplicates` check asserts counts
+by natural key each time). Fixture data is throwaway (ADR-0010: direct
+Hasura writes are smoke-test-only; Phase 2 must use CitrineOS's supported
+APIs).
+
 ## What runs where
 
 - Swagger / OpenAPI docs: <http://localhost:8088/docs> (CitrineOS HTTP API)

@@ -176,6 +176,70 @@ evstation-realm.json`) declares realm `evstation` with one public client
   test and simulator. Phase 2 defines the production station naming
   convention.
 
+### Simulator & station-preparation issues (commit 6/7 record)
+
+- OCPP 1.6J `StopTransactionResponse` has **no `status` field**; the
+  simulator asserts a CallResult arriving at all (plus `StartTransaction`
+  asserts a server-assigned positive integer `transactionId`). No protocol
+  bug — a spec fact.
+- CitrineOS assigns `transactionId` **server-side**; the persisted
+  `Transactions.transactionId` is stored as a **string** (the smoke test
+  compares `String(t.transactionId) === txnId`), while the 1.6 wire value
+  is an int.
+- `Authorizations.idToken` is **CITEXT**; Hasura GraphQL variables touching
+  it must be typed `citext!`, not `String!` (validation-failed otherwise).
+- The Hasura inserts need explicit `coordinates` (PostGIS, NOT NULL),
+  `createdAt`/`updatedAt` (`"now()"`) — the Sequelize defaults in the model
+  are _not_ backed by DB defaults in the vendored migrations.
+- An unregistered station still boots (`CITRINEOS_OCPP_UNKNOWNCHARGERSTATUS`
+  defaults to `Accepted`), but `Authorize`/`StartTransaction` fail without
+  an `Authorizations` row — fixtures must exist before the session.
+- The smoke test's first draft queried a `Transactions.meterStop` column
+  that does not exist (meter stop lives on `StopTransactions`); corrected to
+  verify `totalKwh > 0` on the actual `Transactions` row instead.
+- Otherwise **no further protocol issues, bugs or work-arounds** were hit in
+  the simulator or the station preparation; the passing session log is
+  reproduced in the Phase 0 final report (unchanged upstream behavior).
+
+### ADR-0010: Hasura station-preparation is smoke-test-only
+
+- **Context.** Phase 0's smoke test creates/updates fixtures (Location →
+  ChargingStation → EVSE → Connector → Authorization) directly through the
+  Hasura admin GraphQL endpoint. That is an internal edge of CitrineOS's DAL
+  (Hasura is not its supported management surface) and requires the admin
+  secret.
+- **Decision.** Direct Hasura writes are acceptable **for local dev fixing
+  and the Phase 0 smoke test only**. The Phase 2 adapter (and any operator
+  flow we ship) must go through CitrineOS's supported APIs — the Swagger
+  HTTP API (`:8088`, auth per ADR-0008) and OCPP messaging — never direct
+  database writes through Hasura or SQL. The smoke test may keep using
+  Hasura because its fixture data is throwaway and CI-scoped; a proof-point
+  is tracked for Phase 2: re-create the same fixtures through the supported
+  operator/data API and delete this ADR's exception.
+- **Consequences.** No product or adapter code is allowed to import the
+  Hasura client; `tools/smoke.mjs` is the only sanctioned writer besides
+  CitrineOS itself. Audit item for Phase 2 review: confirm no adapter code
+  touches port 8090.
+
+### Known issues (Phase 0 close-out list)
+
+1. Authenticated OCPP ports are **not yet exercised**: profile 1 basic
+   auth (`:8082`) and TLS/mTLS (`:8443/:8444`) — Connectors/charging flows
+   ran on profile 0 only. Defer to Phase 1 wiring of the first real
+   charging slice.
+2. Image EOL watch items are tracked in ADR-0009 (Hasura v2.40 line
+   outside Hasura's supported LTS lines; RabbitMQ 3.13 OSS support has
+   ended — both pinned for reproducibility, upgrade spec'd for hardening).
+3. Hasura `/healthz` is open (no secret) by upstream design; 8090 is bound
+   to 127.0.0.1 only in this stack (graph X-Real-IP not exposed).
+4. CitrineOS HTTP auth defaults to `localDev` (`/dev/token`) — ADR-0008
+   tracks the swap to `jwt`/Keycloak before any shared environment.
+5. The dashboard/API packages are placeholders: ports 3200/4000 reserved
+   (ADR-0007) but no code wired yet (Phase 1).
+6. The OCPP WebSocket server runs with `allowUnknownChargingStations: true`
+   at the pin; production tightening is documented in the RUNBOOK's
+   "OCPP WebSocket exposure" section.
+
 ### ADR-0007: Dev port map — defaults, configurability, reserved ports
 
 - **Context.** Ports 8080 and 3000 are permanently reserved on the
@@ -209,7 +273,7 @@ evstation-realm.json`) declares realm `evstation` with one public client
   changes; then `git diff <old-pin-ref>:docker-compose.yml
 infra/compose/docker-compose.yml` for ours-vs-new; repeat for
   `apps/ocpp-server/src/assets` and `apps/ocpp-server/db/hasura-metadata`
-  ( elemento vendored copies in `infra/compose/` and
+  (the vendored copies in `infra/compose/` and
   `third_party/citrineos-core/`). Every deliberate divergence we add
   (ports, our-db service, Keycloak block, env-file switches) must still be
   present and documented after the refresh — the upgrade commit lists

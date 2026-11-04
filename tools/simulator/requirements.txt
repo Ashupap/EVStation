@@ -1,0 +1,3 @@
+# Exact pins (see docs/DECISIONS.md — same exact-pin policy as the pnpm side).
+# The simulator itself sleeps ~15 s per session by design (no other deps).
+websockets==16.1.1

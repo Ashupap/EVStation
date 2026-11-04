@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "health": "node scripts/health.mjs",
     "health:json": "node scripts/health.mjs --json",
+    "smoke": "node tools/smoke.mjs",
     "install:ci": "pnpm install --frozen-lockfile",
     "dev:bootstrap": "node scripts/bootstrap-citrineos.mjs",
     "dev:stack": "pnpm dev:bootstrap && node scripts/dev-stack.mjs up",

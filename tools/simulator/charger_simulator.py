@@ -1,25 +1,42 @@
 """
 Minimal OCPP 1.6J charger simulator for testing a CSMS (e.g. CitrineOS).
 
-Requires: pip install "websockets>=14"
-
 Usage examples:
-  python charger_simulator.py --url ws://localhost:8081 --id CP001
-  python charger_simulator.py --url ws://localhost:8082 --id CP001 --password secret123
-  python charger_simulator.py --url ws://localhost:8081 --id CP001 --no-session
+  python charger_simulator.py --url ws://localhost:8081 --id cp001
+  python charger_simulator.py --url ws://localhost:8081 --id cp001 --no-session
+  python charger_simulator.py --url ws://localhost:8081 --id cp001 --exit-after-session
 
 The charger dials OUT to <url>/<id>, exactly as a real charger does.
+
+Exits:
+  0 = session completed as asserted (exit-after-session) or clean indefinite run
+  2 = a test assertion failed (unexpected reply, wire error, timeout)
+Errors and unexpected frames are hard failures on the standard streams; they
+never print-and-return, so CI can rely on the exit code.
+
+Python >= 3.10; install deps from requirements.txt (pinned exact versions):
+  python -m venv .venv && .venv/bin/pip install -r tools/simulator/requirements.txt
 """
 import argparse
 import asyncio
 import base64
 import json
+import sys
 import uuid
 from datetime import datetime, timezone
 
 from websockets.asyncio.client import connect
 
 CALL, CALLRESULT, CALLERROR = 2, 3, 4
+
+EX_OK = 0
+EX_ASSERT_FAILED = 2
+
+
+def assert_eq(expected, actual, what):
+    if expected != actual:
+        raise AssertionError(f"assert {what}: expected {expected!r}, got {actual!r}")
+    print(f"    assert OK  {what} == {expected!r}")
 
 
 def now():
@@ -52,7 +69,7 @@ class Charger:
             if msg[0] == CALLRESULT and msg[1] in self.pending:
                 self.pending.pop(msg[1]).set_result(msg[2])
             elif msg[0] == CALLERROR and msg[1] in self.pending:
-                self.pending.pop(msg[1]).set_exception(RuntimeError(msg))
+                raise AssertionError(f"CSMS returned CALLERROR for our pending call: {msg}")
             elif msg[0] == CALL:
                 await self.handle_command(msg[1], msg[2], msg[3])
 
@@ -86,9 +103,7 @@ class Charger:
             "chargePointSerialNumber": self.args.id,
             "firmwareVersion": "1.0.0",
         })
-        if boot.get("status") != "Accepted":
-            print(f"CSMS did not accept boot: {boot}. Register the station first.")
-            return
+        assert_eq("Accepted", boot.get("status"), "BootNotification.status")
         interval = max(int(boot.get("interval", 30)), 5)
         asyncio.create_task(self.heartbeat_loop(interval))
 
@@ -99,6 +114,7 @@ class Charger:
 
         if not self.args.no_session:
             await self.charging_session()
+            return
 
         print("\nSimulator idle. Heartbeats continue; try remote commands from the CSMS.")
         await listener
@@ -106,9 +122,7 @@ class Charger:
     async def charging_session(self):
         # 3. Driver taps RFID
         auth = await self.call("Authorize", {"idTag": self.args.id_tag})
-        if auth["idTagInfo"]["status"] != "Accepted":
-            print(f"idTag rejected: {auth}. Add it to the CSMS authorization list.")
-            return
+        assert_eq("Accepted", auth["idTagInfo"]["status"], "Authorize.idTagInfo.status")
 
         # 4. Start transaction
         await self.call("StatusNotification", {
@@ -118,6 +132,8 @@ class Charger:
             "connectorId": 1, "idTag": self.args.id_tag,
             "meterStart": 0, "timestamp": now()})
         self.transaction_id = start["transactionId"]
+        assert isinstance(self.transaction_id, int) and self.transaction_id > 0, (
+            f"assert StartTransaction.transactionId positive integer, got {self.transaction_id!r}")
         await self.call("StatusNotification", {
             "connectorId": 1, "errorCode": "NoError",
             "status": "Charging", "timestamp": now()})
@@ -134,22 +150,29 @@ class Charger:
                     {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"},
                 ]}]})
 
-        # 6. Stop
+        # 6. Stop (OCPP 1.6J StopTransaction.conf has no `status` field; a
+        # CallResult frame arriving at all means the CSMS processed it)
         await self.call("StopTransaction", {
             "transactionId": self.transaction_id, "idTag": self.args.id_tag,
             "meterStop": self.energy_wh, "timestamp": now(), "reason": "Local"})
         await self.call("StatusNotification", {
             "connectorId": 1, "errorCode": "NoError",
             "status": "Available", "timestamp": now()})
+        if self.args.exit_after_session:
+            print("\nSession complete; exiting cleanly (--exit-after-session).")
+            raise SystemExit(EX_OK)
 
 
 async def main():
     p = argparse.ArgumentParser()
     p.add_argument("--url", default="ws://localhost:8081", help="CSMS WebSocket base URL")
-    p.add_argument("--id", default="CP001", help="Charge point ID (path suffix)")
+    p.add_argument("--id", default="cp001", help="Charge point ID (path suffix)")
     p.add_argument("--password", help="Basic-auth password (security profile 1/2)")
-    p.add_argument("--id-tag", default="DEMO_TAG", help="RFID tag used for the test session")
+    p.add_argument("--id-tag", default="DEADBEEF", help="RFID tag used for the test session")
     p.add_argument("--no-session", action="store_true", help="Only boot + heartbeat")
+    p.add_argument("--exit-after-session", action="store_true",
+                   help="Exit with code 0 after the charging session completes (CI mode); "
+                        "default keeps heartbeating for manual CSMS experimentation")
     args = p.parse_args()
 
     headers = {}
@@ -160,9 +183,15 @@ async def main():
     uri = f"{args.url.rstrip('/')}/{args.id}"
     print(f"Connecting to {uri} ...")
     async with connect(uri, subprotocols=["ocpp1.6"], additional_headers=headers) as ws:
-        print("WebSocket connected.\n")
+        print(f"WebSocket connected (id={args.id}, id_tag={args.id_tag}).\n")
         await Charger(ws, args).run()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (AssertionError, SystemExit) as e:
+        if isinstance(e, AssertionError):
+            print(f"SIMULATION FAILED: {e}", file=sys.stderr)
+            raise SystemExit(EX_ASSERT_FAILED)
+        raise  # SystemExit(EX_OK) propagates normally

@@ -9,6 +9,7 @@ out/
 
 # Test artifacts
 coverage/
+.venv/
 
 # Environment files (committed templates only)
 .env
