@@ -199,3 +199,8 @@ deployment slice.
   migrations, which can take minutes on slow disks.
 - **Keycloak reports transport 8080 refusals in healthcheck** — Keycloak
   needs ~30–60 s on first start; `--wait` retries before failing.
+- **`pnpm smoke` fails at the simulator step** — a Python with the pinned
+  `websockets` module is required. One-off:
+  `python3 -m venv .venv && .venv/bin/pip install -r tools/simulator/requirements.txt`
+  (pinned exact versions, incl. `websockets==16.1.1`), or point `SIM_PYTHON`
+  at an existing interpreter. See `tools/simulator/README.md`.
