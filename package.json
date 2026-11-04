@@ -25,6 +25,7 @@
     "prepare": "husky"
   },
   "devDependencies": {
+    "@types/node": "26.6.5",
     "eslint": "10.14.0",
     "eslint-config-prettier": "10.1.8",
     "husky": "9.1.7",
@@ -38,5 +39,10 @@
   "repository": {
     "type": "git",
     "private": true
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
