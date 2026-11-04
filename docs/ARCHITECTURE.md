@@ -1,9 +1,11 @@
-# EVStation — Phase 0 Architecture
+# EVStation — Architecture (Phase 0 baseline, Phase 1 auth/tenancy)
 
-One-command local CMS: the pinned upstream CitrineOS stack, our project
-template around it, and end-to-end proof tooling. Everything below runs from
-a clean clone with `pnpm dev:stack` and is verified by `pnpm health` +
-`pnpm smoke`.
+Phase 0 delivers the one-command local CMS: the pinned upstream CitrineOS
+stack, our project template around it, and end-to-end proof tooling. Phase 1
+(additive) adds Keycloak-backed authentication, a DB-enforced tenant model
+and the dashboard/API shells; see "Phase 1" below. Everything runs from a
+clean clone with `pnpm dev:stack` and is verified by `pnpm health` +
+`pnpm smoke` (plus the Phase 1 test suites).
 
 ```text
                         ┌──────── EVStation (this repo) ─────────┐
@@ -70,6 +72,41 @@ a clean clone with `pnpm dev:stack` and is verified by `pnpm health` +
   `allowUnknownChargingStations` policy) is pre-designed in RUNBOOK →
   "OCPP WebSocket exposure" and deferred (known-issue list).
 
+## Phase 1 — authentication, tenancy, RLS
+
+```text
+browser ──▶ dashboard :3200 (Next.js BFF)          API :4000 (Fastify)
+              │  opaque session cookie (HttpOnly)      ▲  Bearer (server-side only)
+              │  tokens in server-side session store   │
+              └──────────────▶ Keycloak :8180 ─────────┘
+                                realm evstation            │
+                                (JWKS, iss, aud)           ▼
+                                                   our-db :5432
+                                                   evstation_app role
+                                                   + RLS (FORCE)
+                                                   + app.tenant_id GUC
+```
+
+- **Login.** Dashboard uses Authorization Code + PKCE with the confidential
+  `dashboard` client (secret from env, applied by the dev seeder). Next.js
+  exchanges the code server-side, keeps tokens in a server-side session store
+  and gives the browser only an opaque session cookie (httpOnly,
+  SameSite=Lax, Secure in production).
+- **API auth.** The API verifies JWTs against Keycloak JWKS (signature,
+  issuer, audience `evstation-api`, expiry) and maps `sub` → `users`.
+- **Tenant context.** One request = one DB transaction. The API sets only
+  `app.actor_id` and the validated `app.tenant_id` (from route param or
+  `X-Tenant-Id`, never body/query). Role, site scope and platform-admin
+  status are derived in the database from `memberships`,
+  `membership_sites` and `platform_admins` (ADR-0011). Missing or
+  foreign tenant context yields zero rows.
+- **Authorization.** A single `authorize(user, action, resource)` module
+  implements the PRD §7 matrix and site scope; routes are declared in one
+  registry used by the fail-closed isolation suite.
+- **Isolation proof.** SQL-level tests connect as `evstation_app` (no
+  BYPASSRLS, not the table owner, FORCE RLS) and prove zero cross-tenant
+  rows; the API isolation suite iterates the route registry.
+
 ## Decisions index
 
 Very short pointers — full reasoning in `docs/DECISIONS.md`:
@@ -86,12 +123,16 @@ Very short pointers — full reasoning in `docs/DECISIONS.md`:
 | ADR-0008 | CitrineOS auth modes: `localDev` dev-only; `jwt` (Phase 2)   |
 | ADR-0009 | Image support/EOL watch (Hasura, RabbitMQ)                   |
 | ADR-0010 | Direct Hasura writes: smoke tests only                       |
+| ADR-0011 | DB roles + RLS; API sets only actor/tenant, DB derives role  |
+| ADR-0012 | API JWT auth, single-tx context, `authorize()`, error shape  |
+| ADR-0013 | Dashboard confidential client + server-side session + CSRF   |
+| ADR-0014 | Invitations (hashed tokens) and append-only audit log        |
 
 ## Phase 1 / 2 entry points
 
-- Dashboard (3200) + API (4000) wire up in Phase 1; realm client
-  - password flow ready.
+- Dashboard (3200) + API (4000) wire up in Phase 1; realm client is
+  confidential (PKCE, secret from env via the dev seeder).
 - Adapter (`packages/csms-adapter`) talks to CitrineOS via Swagger (add a
   Bearer token factory — ADR-0008) and OCPP routing DB events.
-- Tenancy: `DEFAULT_TENANT_ID = 1` today; mapping to real tenants is Phase 1
-  planning input.
+- Tenancy: Phase 1 introduces real tenants in our DB; mapping CitrineOS's
+  `DEFAULT_TENANT_ID` to our tenant model is Phase 2 planning input.
