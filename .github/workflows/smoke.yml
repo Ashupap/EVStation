@@ -1,0 +1,42 @@
+name: smoke
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 2 * * *' # nightly UTC
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.2
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pnpm install --frozen-lockfile
+      - name: Start dev stack
+        run: pnpm dev:stack
+      - name: Health check
+        run: pnpm health
+      - name: Pin the simulator's dependencies
+        run: python3 -m venv .venv && .venv/bin/pip install -r tools/simulator/requirements.txt
+      - name: Smoke test (fresh volumes)
+        run: pnpm smoke
+      - name: Smoke test (rerun without cleanup proves idempotency)
+        run: pnpm smoke
+      - name: Collect artifacts on failure
+        if: failure()
+        run: |
+          docker ps -a > smoke-docker-ps.txt || true
+          docker logs evstation-citrine-1 > smoke-citrine.log 2>&1 || true
+          docker logs evstation-graphql-engine-1 > smoke-hasura.log 2>&1 || true
+          pnpm health > smoke-health.txt || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: smoke-failure-artifacts
+          path: smoke-*
