@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { Client } from 'pg';
+import { Client } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import {
   APP_PASSWORD,
@@ -480,6 +480,83 @@ describe('membership guards', () => {
       );
       expect(updated.rowCount).toBe(1);
     });
+  });
+});
+
+describe('last-admin concurrency and platform admin acting', () => {
+  test('two admins demoting each other cannot leave the tenant without an admin', async () => {
+    await appCommit(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      await client.query(
+        "INSERT INTO app.memberships (tenant_id, user_id, role) VALUES ($1, $2, 'tenant_admin')",
+        [A, OUTSIDER_ID],
+      );
+    });
+
+    const app2 = new Client({ connectionString: db.appUrl });
+    await app2.connect();
+    try {
+      await db.app.query('BEGIN');
+      await db.app.query("SELECT set_config('app.actor_id', $1, true)", [ADMIN_A]);
+      await db.app.query("SELECT set_config('app.tenant_id', $1, true)", [A]);
+      await app2.query('BEGIN');
+      await app2.query("SELECT set_config('app.actor_id', $1, true)", [OUTSIDER_ID]);
+      await app2.query("SELECT set_config('app.tenant_id', $1, true)", [A]);
+
+      await db.app.query("UPDATE app.memberships SET role = 'viewer' WHERE user_id = $1", [
+        OUTSIDER_ID,
+      ]);
+      const pidRow = await app2.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      let outcome: { ok: true } | { ok: false; message: string } | null = null;
+      const second = app2
+        .query("UPDATE app.memberships SET role = 'viewer' WHERE user_id = $1", [ADMIN_A])
+        .then(
+          () => {
+            outcome = { ok: true };
+          },
+          (error: Error) => {
+            outcome = { ok: false, message: error.message };
+          },
+        );
+      for (let i = 0; i < 100; i++) {
+        const activity = await db.superuser.query(
+          "SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'",
+          [pidRow.rows[0]?.pid],
+        );
+        if (activity.rowCount || outcome !== null) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await db.app.query('COMMIT');
+      await second;
+
+      let commitError: string | null = null;
+      try {
+        await app2.query('COMMIT');
+      } catch (error) {
+        commitError = (error as Error).message;
+      }
+      expect(commitError).toBeNull();
+      if (outcome?.ok === false) {
+        expect(outcome.message).toMatch(/last_tenant_admin|membership_change_forbidden/);
+      }
+
+      const admins = await db.superuser.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM app.memberships WHERE tenant_id = $1 AND role = 'tenant_admin'",
+        [A],
+      );
+      expect(Number(admins.rows[0]?.n)).toBe(1);
+    } finally {
+      await app2.end();
+    }
+  });
+
+  test('a platform admin acting in a tenant cannot remove its last admin', async () => {
+    await expect(
+      appTx(db, { actor: PLATFORM, tenant: A }, async (client) => {
+        await client.query("UPDATE app.memberships SET role = 'viewer' WHERE user_id = $1", [
+          ADMIN_A,
+        ]);
+      }),
+    ).rejects.toThrow(/last_tenant_admin/);
   });
 });
 
