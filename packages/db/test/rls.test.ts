@@ -518,6 +518,62 @@ describe('audit log', () => {
   });
 });
 
+describe('ensure_actor (first login)', () => {
+  test('upserts only the caller row from verified claims and syncs email', async () => {
+    await appCommit(db, { actor: OUTSIDER_ID }, async (client) => {
+      const inserted = await client.query('SELECT * FROM app.ensure_actor($1, $2, true)', [
+        OUTSIDER_ID,
+        'Outsider2@Example.com',
+      ]);
+      expect(inserted.rows[0]).toMatchObject({
+        id: OUTSIDER_ID,
+        email: 'outsider2@example.com',
+        email_verified: true,
+      });
+    });
+    const row = await db.superuser.query('SELECT email FROM app.users WHERE id = $1', [
+      OUTSIDER_ID,
+    ]);
+    expect(row.rows[0]?.email).toBe('outsider2@example.com');
+  });
+
+  test('rejects mismatched actor, unverified email, and does not touch other users', async () => {
+    await expect(
+      appTx(db, { actor: OUTSIDER_ID }, async (client) => {
+        await client.query('SELECT * FROM app.ensure_actor($1, $2, true)', [
+          PLATFORM,
+          'platform@evstation.dev',
+        ]);
+      }),
+    ).rejects.toThrow(/actor_mismatch/);
+
+    await expect(
+      appTx(db, { actor: OUTSIDER_ID }, async (client) => {
+        await client.query('SELECT * FROM app.ensure_actor($1, $2, false)', [
+          OUTSIDER_ID,
+          'outsider@example.com',
+        ]);
+      }),
+    ).rejects.toThrow(/email_not_verified/);
+
+    const platform = await db.superuser.query('SELECT email FROM app.users WHERE id = $1', [
+      PLATFORM,
+    ]);
+    expect(platform.rows[0]?.email).toBe('platform@evstation.dev');
+  });
+
+  test('app role still has no direct INSERT grant on users', async () => {
+    await expect(
+      appTx(db, { actor: OUTSIDER_ID }, async (client) => {
+        await client.query(
+          "INSERT INTO app.users (id, email, email_verified) VALUES ($1, 'x@example.com', true)",
+          [OUTSIDER_ID],
+        );
+      }),
+    ).rejects.toMatchObject({ code: '42501' });
+  });
+});
+
 describe('owner-owned SECURITY DEFINER regression (ADR-0011)', () => {
   test('a definer function owned by evstation_owner is still RLS-filtered', async () => {
     await db.superuser.query(`
