@@ -897,6 +897,66 @@ describe('invitations and accept_invitation', () => {
   });
 });
 
+describe('invitation authority hardening', () => {
+  test('app cannot rewrite invitation authority fields after insert', async () => {
+    const { hash } = await insertInvitation('immutable@example.com', 'viewer');
+    for (const [column, value] of [
+      ['role', "'tenant_admin'"],
+      ['email', "'other@example.com'"],
+      ['tenant_id', `'${B}'`],
+      ['site_ids', `ARRAY['${SITE_A1}']::uuid[]`],
+      ['token_hash', `'${token().hash}'`],
+      ['expires_at', "now() + interval '30 days'"],
+    ] as const) {
+      await expect(
+        appTx(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+          await client.query(
+            `UPDATE app.invitations SET ${column} = ${value} WHERE token_hash = $1`,
+            [hash],
+          );
+        }),
+      ).rejects.toMatchObject({ code: '42501' });
+    }
+  });
+
+  test('acceptance re-checks that the inviter is still authorized', async () => {
+    const { hash } = await insertInvitation('stale-inviter@example.com', 'viewer');
+    await appCommit(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      await client.query(
+        "INSERT INTO app.memberships (tenant_id, user_id, role) VALUES ($1, $2, 'tenant_admin')",
+        [A, OUTSIDER_ID],
+      );
+    });
+    await appCommit(db, { actor: PLATFORM, tenant: A }, async (client) => {
+      await client.query("UPDATE app.memberships SET role = 'viewer' WHERE user_id = $1", [
+        ADMIN_A,
+      ]);
+    });
+
+    await expect(
+      accept('00000000-0000-4000-8000-0000000000c1', 'stale-inviter@example.com', hash),
+    ).rejects.toThrow(/inviter_not_authorized/);
+  });
+
+  test('records an audit_log row when an invitation is accepted', async () => {
+    const { hash } = await insertInvitation('audited@example.com', 'viewer');
+    const invitee = '00000000-0000-4000-8000-0000000000c2';
+    await accept(invitee, 'audited@example.com', hash);
+
+    const audit = await db.superuser.query(
+      `SELECT tenant_id, actor_id, action, resource_type, resource_id, outcome
+       FROM app.audit_log WHERE action = 'invitation.accepted'`,
+    );
+    expect(audit.rows[0]).toMatchObject({
+      tenant_id: A,
+      actor_id: invitee,
+      action: 'invitation.accepted',
+      resource_type: 'invitation',
+      outcome: 'allowed',
+    });
+  });
+});
+
 describe('boot preconditions (shared constants)', () => {
   test('seed ids are stable and role passwords are distinct', () => {
     expect(EVSTATION_IDS.acmeTenant).not.toBe(EVSTATION_IDS.betaTenant);
