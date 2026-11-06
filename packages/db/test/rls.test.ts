@@ -574,6 +574,67 @@ describe('ensure_actor (first login)', () => {
   });
 });
 
+describe('guard NULL safety (direct, RLS bypassed via superuser)', () => {
+  async function superuserCtx(ctx: { actor?: string; tenant?: string }, fn: () => Promise<void>) {
+    await db.superuser.query('BEGIN');
+    try {
+      if (ctx.actor !== undefined) {
+        await db.superuser.query("SELECT set_config('app.actor_id', $1, true)", [ctx.actor]);
+      }
+      if (ctx.tenant !== undefined) {
+        await db.superuser.query("SELECT set_config('app.tenant_id', $1, true)", [ctx.tenant]);
+      }
+      await fn();
+    } finally {
+      await db.superuser.query('ROLLBACK');
+    }
+  }
+
+  test('guard_membership is closed when the actor has no membership (NULL helpers)', async () => {
+    await expect(
+      superuserCtx({ actor: OUTSIDER_ID, tenant: A }, async () => {
+        await db.superuser.query("UPDATE app.memberships SET role = 'viewer' WHERE user_id = $1", [
+          VIEWER_A,
+        ]);
+      }),
+    ).rejects.toThrow(/membership_change_forbidden/);
+  });
+
+  test('guard_invitation is closed when the actor has no membership (NULL helpers)', async () => {
+    await expect(
+      superuserCtx({ actor: OUTSIDER_ID, tenant: A }, async () => {
+        await db.superuser.query(
+          `INSERT INTO app.invitations (tenant_id, email, role, invited_by, token_hash, expires_at)
+           VALUES ($1, 'null@example.com', 'viewer', $2, $3, now() + interval '1 day')`,
+          [A, ADMIN_A, token().hash],
+        );
+      }),
+    ).rejects.toThrow(/invitation_forbidden/);
+  });
+
+  test('guard_tenant_status is closed for non-platform actors', async () => {
+    await expect(
+      superuserCtx({ actor: OUTSIDER_ID, tenant: A }, async () => {
+        await db.superuser.query("UPDATE app.tenants SET status = 'suspended' WHERE id = $1", [A]);
+      }),
+    ).rejects.toThrow(/tenant_status_forbidden/);
+  });
+});
+
+describe('malformed context fails closed', () => {
+  test('garbage actor/tenant UUIDs yield no rows instead of an error', async () => {
+    await appTx(db, { actor: 'not-a-uuid', tenant: 'also-not-a-uuid' }, async (client) => {
+      const { rows } = await client.query<{ actor: string | null; tenant: string | null }>(
+        'SELECT app.actor_id() AS actor, app.tenant_id() AS tenant',
+      );
+      expect(rows[0]).toEqual({ actor: null, tenant: null });
+      for (const table of ['tenants', 'sites', 'memberships', 'users', 'audit_log']) {
+        expect(await count(client, table)).toBe(0);
+      }
+    });
+  });
+});
+
 describe('owner-owned SECURITY DEFINER regression (ADR-0011)', () => {
   test('a definer function owned by evstation_owner is still RLS-filtered', async () => {
     await db.superuser.query(`
