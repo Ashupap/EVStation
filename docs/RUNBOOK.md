@@ -108,6 +108,21 @@ node packages/db/scripts/explain-policies.mjs full sites
 Append new plans/timings (and machine specs) to
 `docs/evidence/phase1-policy-perf.log`; never rewrite old numbers.
 
+## API service (Phase 1)
+
+```shell
+cp apps/api/.env.example apps/api/.env   # fill DATABASE_URL_APP + OIDC settings
+pnpm --filter @evstation/api dev         # tsx watch, 127.0.0.1:4000
+curl -s localhost:4000/health
+curl -s localhost:4000/health/ready
+```
+
+The API refuses to boot if `DATABASE_URL_APP` equals the owner/migrator URL or
+the connected role is superuser/BYPASSRLS. Tenant-scoped requests use the
+verified JWT plus `X-Tenant-Id` (or an `:tenantId` route param); the header is
+validated against memberships/platform-admin status. OpenAPI is served at
+`/openapi.json` and `/docs`; tests are in `apps/api/test` (`pnpm test`).
+
 ## Start / stop
 
 ```shell
