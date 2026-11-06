@@ -1,0 +1,94 @@
+# Phase 1 RLS policy performance evidence (review HIGH 8 / MEDIUM 12)
+
+Environment: local docker stack (postgis/postgis:16-3.5), tenant `acme`
+(10000000-0000-4000-8000-000000000001), actor acme tenant_admin
+(10000000-0000-4000-8000-000000000011), 100k extra sites, 100k extra users
+and 100k extra memberships in that tenant.
+
+Reproduce:
+  INSERT INTO app.sites (tenant_id, name)
+    SELECT '10000000-0000-4000-8000-000000000001', 'Perf Site ' || g
+    FROM generate_series(1, 100000) g;
+  INSERT INTO app.users (id, email, email_verified, display_name)
+    SELECT ('20000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid,
+           'perf-' || g || '@example.com', true, 'Perf ' || g
+    FROM generate_series(1, 100000) g;
+  INSERT INTO app.memberships (tenant_id, user_id, role)
+    SELECT '10000000-0000-4000-8000-000000000001',
+           ('20000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'viewer'
+    FROM generate_series(1, 100000) g;
+  node packages/db/scripts/explain-policies.mjs plan sites
+  node packages/db/scripts/explain-policies.mjs time sites 1000
+  node packages/db/scripts/explain-policies.mjs full sites
+
+## Before (0013): bare helper calls, evaluated per row
+
+EXPLAIN (VERBOSE, COSTS OFF) SELECT count(*) FROM app.sites;
+
+Aggregate
+  Output: count(*)
+  ->  Index Scan using sites_tenant_idx on app.sites
+        Output: id, tenant_id, name, address, status, created_at, updated_at
+        Index Cond: (sites.tenant_id = app.tenant_id())
+        Filter: (app.can_manage_tenant() OR (app.actor_role() = 'viewer'::text) OR app.has_site(sites.id))
+
+The 100k count did not finish in five minutes and the backend was terminated.
+A 1,000-row subset (LIMIT 1000) still took ~2.9s because every candidate row
+re-entered the helper functions:
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM (SELECT 1 FROM app.sites LIMIT 1000) s;
+
+Aggregate  (actual time=2937.379..2937.381 rows=1 loops=1)
+  Buffers: shared hit=19037
+  ->  Limit  (actual time=4.037..2935.930 rows=1000 loops=1)
+        ->  Index Scan using sites_tenant_idx on sites
+              (actual time=4.035..2934.882 rows=1000 loops=1)
+              Index Cond: (tenant_id = app.tenant_id())
+              Filter: (app.can_manage_tenant() OR (app.actor_role() = 'viewer'::text) OR app.has_site(id))
+Execution Time: 2937.440 ms
+
+## After (0014): helpers hoisted to InitPlans
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM app.sites;  -- 100k rows
+
+Aggregate  (cost=2475.95..2475.96 rows=1 width=8)
+           (actual time=84.858..84.861 rows=1 loops=1)
+  Buffers: shared hit=1652 dirtied=4
+  InitPlan 1 (returns $0)
+    ->  Result  (actual time=5.756..5.757 rows=1 loops=1)
+  InitPlan 2 (returns $1)
+    ->  Result  (actual time=4.218..4.218 rows=1 loops=1)
+  InitPlan 3 (returns $2)
+    ->  Result  (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (never executed)
+  ->  Index Scan using sites_tenant_idx on sites
+        (actual time=10.025..69.220 rows=100002 loops=1)
+        Index Cond: (tenant_id = $0)
+        Filter: ($1 OR ($2 = 'viewer'::text) OR (id = ANY ($3)))
+Execution Time: 85.069 ms
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM app.memberships;  -- 100k rows
+
+Aggregate  (actual time=53.079..53.082 rows=1 loops=1)
+  InitPlan 1..3 (actor_id, tenant_id, can_manage_tenant)
+  ->  Seq Scan on memberships (actual time=4.933..41.396 rows=100003 loops=1)
+        Filter: ((user_id = $0) OR ((tenant_id = $1) AND $2))
+Execution Time: 53.347 ms
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM app.users;  -- 100k rows
+
+Aggregate  (actual time=741.265..741.272 rows=1 loops=1)
+  InitPlan 1..2 (actor_id, can_manage_tenant)
+  ->  Seq Scan on users (actual time=648.453..725.902 rows=100003 loops=1)
+        Filter: ((id = $0) OR ($1 AND (hashed SubPlan 12)))
+        SubPlan 12
+          ->  Seq Scan on memberships m (actual time=40.574..87.187 rows=100003 loops=1)
+                Filter: ((tenant_id = $8) AND ((user_id = $9) OR ((tenant_id = $10) AND $11)))
+Execution Time: 1254.017 ms
+
+The users policy is intentionally still an inline per-row membership
+existence check (review MEDIUM 12): it now uses the membership expression
+instead of calling app.is_user_in_tenant() per row, and all stable context
+lookups are InitPlans. Total suite after 0014: 39/39.

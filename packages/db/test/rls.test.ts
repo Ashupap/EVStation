@@ -966,6 +966,23 @@ describe('invitation authority hardening', () => {
   });
 });
 
+describe('policy shape', () => {
+  test('hot RLS policies hoist stable helpers into scalar subqueries', async () => {
+    const { rows } = await db.superuser.query<{ policyname: string; qual: string }>(
+      `SELECT policyname, qual FROM pg_policies
+       WHERE schemaname = 'app' AND policyname IN (
+         'sites_select', 'sites_update', 'memberships_select', 'users_select'
+       )`,
+    );
+    expect(rows).toHaveLength(4);
+    for (const policy of rows) {
+      expect(policy.qual, policy.policyname).toMatch(
+        /SELECT app\.(tenant_id|actor_id|can_manage_tenant|actor_role|actor_site_ids)\(\)/,
+      );
+    }
+  });
+});
+
 describe('boot preconditions (shared constants)', () => {
   test('seed ids are stable and role passwords are distinct', () => {
     expect(EVSTATION_IDS.acmeTenant).not.toBe(EVSTATION_IDS.betaTenant);
