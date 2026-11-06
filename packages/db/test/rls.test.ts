@@ -381,14 +381,23 @@ describe('site manager / viewer scope', () => {
 });
 
 describe('platform admin', () => {
-  test('sees all tenants; no tenant context means no tenant-scoped rows', async () => {
+  test('tenant directory is global; tenant-scoped reads require tenant context', async () => {
     await appTx(db, { actor: PLATFORM }, async (client) => {
       expect(await count(client, 'tenants')).toBe(2);
       expect(await count(client, 'sites')).toBe(0);
-      expect(await count(client, 'memberships')).toBe(4);
+      expect(await count(client, 'memberships')).toBe(0);
+      expect(await emails(client)).toEqual(['platform@evstation.dev']);
+      expect(await count(client, 'audit_log')).toBe(0);
     });
     await appTx(db, { actor: PLATFORM, tenant: A }, async (client) => {
       expect(await count(client, 'sites')).toBe(2);
+      expect(await count(client, 'memberships')).toBe(3);
+      expect(await emails(client)).toEqual([
+        'admin@acme.example',
+        'manager@acme.example',
+        'platform@evstation.dev',
+        'viewer@acme.example',
+      ]);
       const inserted = await client.query(
         "INSERT INTO app.sites (tenant_id, name) VALUES ($1, 'Platform-created') RETURNING id",
         [A],

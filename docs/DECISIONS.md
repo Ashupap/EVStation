@@ -372,12 +372,16 @@ PUBLIC`, `GRANT EXECUTE` to `evstation_app` only. They are `STABLE`.
     by `evstation_definer` (see ADR-0014); the invitee has no tenant context
     yet, so ordinary policies cannot admit the membership insert.
   - Policies: `tenants` SELECT = active tenant, platform admin, **or any
-    tenant the actor is a member of** (tenant switcher); `memberships`
-    SELECT = own rows + active tenant rows; `users` SELECT = self,
-    tenant_admin/platform_admin for others (viewers/site managers cannot
-    enumerate users); `sites` = tenant read for admins/viewers, site scope for
-    site managers, writes as per the matrix; `invitations` and `audit_log`
-    tenant-admin only; `audit_log` inserts require `actor_id =
+    tenant the actor is a member of** (tenant switcher; the tenant directory
+    stays global for platform admins); every other tenant-scoped read requires
+    the tenant GUC, including for platform admins: `memberships` SELECT = own
+    rows + selected-tenant rows for managers; `users` SELECT = self +
+    selected-tenant members for managers (viewers/site managers cannot
+    enumerate users); `sites` = selected-tenant read for admins/viewers, site
+    scope for site managers, writes as per the matrix; `invitations` and
+    `audit_log` selected-tenant managers only. A platform admin with no tenant
+    GUC therefore sees the tenant directory and its own user row, but no
+    tenant-scoped rows. `audit_log` inserts require `actor_id =
 app.actor_id()` with no UPDATE/DELETE grants plus an append-only trigger
     backstop.
   - Membership safety rules are enforced in the database as well as in
