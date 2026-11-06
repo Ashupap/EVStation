@@ -151,12 +151,21 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
+      '@testcontainers/postgresql':
+        specifier: 12.2.1
+        version: 12.2.1(bare-buffer@3.7.1)
+      '@types/node':
+        specifier: 26.6.5
+        version: 26.6.5
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
       drizzle-kit:
         specifier: 0.31.11
         version: 0.31.11
+      testcontainers:
+        specifier: 12.2.1
+        version: 12.2.1(bare-buffer@3.7.1)
 
   packages/shared:
     dependencies:

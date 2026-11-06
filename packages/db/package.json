@@ -18,6 +18,9 @@
   },
   "devDependencies": {
     "@types/pg": "8.23.1",
-    "drizzle-kit": "0.31.11"
+    "drizzle-kit": "0.31.11",
+    "@testcontainers/postgresql": "12.2.1",
+    "@types/node": "26.6.5",
+    "testcontainers": "12.2.1"
   }
 }
