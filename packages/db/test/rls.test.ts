@@ -566,8 +566,9 @@ describe('last-admin concurrency and platform admin acting', () => {
         commitError = (error as Error).message;
       }
       expect(commitError).toBeNull();
-      if (outcome?.ok === false) {
-        expect(outcome.message).toMatch(/last_tenant_admin|membership_change_forbidden/);
+      const result = outcome as { ok: true } | { ok: false; message: string } | null;
+      if (result?.ok === false) {
+        expect(result.message).toMatch(/last_tenant_admin|membership_change_forbidden/);
       }
 
       const admins = await db.superuser.query<{ n: string }>(
