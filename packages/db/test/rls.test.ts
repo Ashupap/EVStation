@@ -709,6 +709,17 @@ describe('guard NULL safety (direct, RLS bypassed via superuser)', () => {
     ).rejects.toThrow(/membership_change_forbidden/);
   });
 
+  test('guard_membership rejects NULL tenant context on insert', async () => {
+    await expect(
+      superuserCtx({ actor: PLATFORM }, async () => {
+        await db.superuser.query(
+          "INSERT INTO app.memberships (tenant_id, user_id, role) VALUES ($1, $2, 'viewer')",
+          [A, OUTSIDER_ID],
+        );
+      }),
+    ).rejects.toThrow(/tenant_mismatch/);
+  });
+
   test('guard_invitation is closed when the actor has no membership (NULL helpers)', async () => {
     await expect(
       superuserCtx({ actor: OUTSIDER_ID, tenant: A }, async () => {
@@ -967,19 +978,41 @@ describe('invitation authority hardening', () => {
   });
 });
 
+describe('invitation email verification NULL safety', () => {
+  test('NULL p_email_verified is rejected', async () => {
+    const { hash } = await insertInvitation('null-verified@example.com', 'viewer');
+    await expect(
+      appTx(db, { actor: '00000000-0000-4000-8000-0000000000d1' }, async (client) => {
+        await client.query('SELECT * FROM app.accept_invitation($1, $2, $3, $4)', [
+          hash,
+          '00000000-0000-4000-8000-0000000000d1',
+          'null-verified@example.com',
+          null,
+        ]);
+      }),
+    ).rejects.toThrow(/email_not_verified/);
+  });
+});
+
 describe('policy shape', () => {
-  test('hot RLS policies hoist stable helpers into scalar subqueries', async () => {
-    const { rows } = await db.superuser.query<{ policyname: string; qual: string }>(
-      `SELECT policyname, qual FROM pg_policies
-       WHERE schemaname = 'app' AND policyname IN (
-         'sites_select', 'sites_update', 'memberships_select', 'users_select'
-       )`,
+  test('every RLS policy hoists zero-argument helpers into scalar subqueries', async () => {
+    const { rows } = await db.superuser.query<{
+      policyname: string;
+      roles: string[];
+      qual: string | null;
+      with_check: string | null;
+    }>(
+      `SELECT policyname, roles::text[] AS roles, qual, with_check
+       FROM pg_policies WHERE schemaname = 'app' ORDER BY policyname`,
     );
-    expect(rows).toHaveLength(4);
+    expect(rows.length).toBeGreaterThan(20);
     for (const policy of rows) {
-      expect(policy.qual, policy.policyname).toMatch(
-        /SELECT app\.(tenant_id|actor_id|can_manage_tenant|actor_role|actor_site_ids)\(\)/,
-      );
+      expect(policy.roles, policy.policyname).toContain('evstation_app');
+      for (const expression of [policy.qual, policy.with_check]) {
+        if (!expression) continue;
+        const hoisted = expression.replace(/SELECT\s+app\.\w+\(\)/g, '');
+        expect(hoisted, `${policy.policyname}: ${expression}`).not.toMatch(/\bapp\.\w+\(\)/);
+      }
     }
   });
 });
@@ -1029,14 +1062,228 @@ describe('least-privilege grants and defaults', () => {
        FROM pg_default_acl d
        JOIN pg_roles r ON r.oid = d.defaclrole
        CROSS JOIN LATERAL aclexplode(d.defaclacl) a
-       WHERE r.rolname IN ('evstation_owner', 'evstation_definer')
+       WHERE r.rolname IN ('evstation', 'evstation_owner', 'evstation_definer')
          AND d.defaclobjtype = 'f'
        GROUP BY r.rolname`,
     );
-    expect(rows.map((row) => row.role).sort()).toEqual(['evstation_definer', 'evstation_owner']);
+    expect(rows.map((row) => row.role).sort()).toEqual([
+      'evstation',
+      'evstation_definer',
+      'evstation_owner',
+    ]);
     for (const row of rows) {
       expect(row.public_execute, row.role).toBe(false);
     }
+  });
+});
+
+describe('committed context does not leak on a pooled connection', () => {
+  test('after a committed tenant transaction, no-context reads are empty', async () => {
+    await appCommit(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      expect(await count(client, 'sites')).toBe(2);
+      expect(await count(client, 'memberships')).toBe(3);
+    });
+    await appTx(db, {}, async (client) => {
+      for (const table of [
+        'tenants',
+        'users',
+        'memberships',
+        'membership_sites',
+        'sites',
+        'platform_admins',
+        'invitations',
+        'audit_log',
+      ]) {
+        expect(await count(client, table)).toBe(0);
+      }
+    });
+    await db.app.query("SELECT set_config('app.actor_id', $1, true)", [ADMIN_A]);
+    await db.app.query("SELECT set_config('app.tenant_id', $1, true)", [A]);
+    await appTx(db, {}, async (client) => {
+      expect(await count(client, 'sites')).toBe(0);
+      expect(await count(client, 'memberships')).toBe(0);
+    });
+  });
+});
+
+describe('database catalog invariants', () => {
+  test('every app function has a closed ACL and a pinned search_path', async () => {
+    const { rows } = await db.superuser.query<{
+      signature: string;
+      proacl: string | null;
+      public_execute: boolean;
+      config: string;
+    }>(
+      `SELECT p.oid::regprocedure::text AS signature,
+              p.proacl::text AS proacl,
+              EXISTS (
+                SELECT 1 FROM aclexplode(p.proacl) a
+                WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE'
+              ) AS public_execute,
+              coalesce(array_to_string(p.proconfig, ','), '') AS config
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'app'
+       ORDER BY signature`,
+    );
+    expect(rows.length).toBeGreaterThan(20);
+    for (const row of rows) {
+      expect(row.proacl, row.signature).not.toBeNull();
+      expect(row.public_execute, row.signature).toBe(false);
+      expect(row.config, row.signature).toMatch(/search_path=.*pg_temp/);
+    }
+  });
+
+  test('app views use security_invoker', async () => {
+    const { rows } = await db.superuser.query<{ relname: string }>(
+      `SELECT c.relname
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'app' AND c.relkind = 'v'
+         AND NOT (coalesce(c.reloptions, '{}') @> ARRAY['security_invoker=true'])`,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  test('app table privileges are the least-privilege matrix; PUBLIC has none', async () => {
+    const expected: Record<string, string[]> = {
+      audit_log: ['SELECT', 'INSERT'],
+      invitations: ['SELECT'],
+      membership_sites: ['SELECT', 'INSERT', 'DELETE'],
+      memberships: ['SELECT', 'INSERT', 'DELETE'],
+      platform_admins: ['SELECT'],
+      sites: ['SELECT', 'INSERT', 'DELETE'],
+      tenants: ['SELECT', 'INSERT'],
+      users: ['SELECT'],
+    };
+    const privilegeNames = [
+      'SELECT',
+      'INSERT',
+      'UPDATE',
+      'DELETE',
+      'TRUNCATE',
+      'REFERENCES',
+      'TRIGGER',
+    ];
+    for (const [table, granted] of Object.entries(expected)) {
+      for (const privilege of privilegeNames) {
+        const { rows } = await db.superuser.query<{ ok: boolean }>(
+          'SELECT has_table_privilege($1, $2, $3) AS ok',
+          ['evstation_app', `app.${table}`, privilege],
+        );
+        expect(rows[0]?.ok, `${table} ${privilege}`).toBe(granted.includes(privilege));
+      }
+    }
+
+    const invitationInsert = await db.superuser.query<{ ok: boolean }>(
+      "SELECT has_column_privilege('evstation_app', 'app.invitations', 'email', 'INSERT') AS ok",
+    );
+    expect(invitationInsert.rows[0]?.ok).toBe(true);
+
+    const publicGrants = await db.superuser.query<{ table: string; privilege: string }>(
+      `SELECT c.relname AS table, a.privilege_type AS privilege
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       CROSS JOIN LATERAL aclexplode(c.relacl) a
+       WHERE n.nspname = 'app' AND c.relkind = 'r' AND a.grantee = 0`,
+    );
+    expect(publicGrants.rows).toEqual([]);
+  });
+
+  test('migration/superuser default privileges close future function EXECUTE', async () => {
+    const { rows } = await db.superuser.query<{
+      role: string;
+      public_execute: boolean;
+    }>(
+      `SELECT r.rolname AS role,
+              coalesce(bool_or(a.grantee = 0 AND a.privilege_type = 'EXECUTE'), false)
+                AS public_execute
+       FROM pg_default_acl d
+       JOIN pg_roles r ON r.oid = d.defaclrole
+       CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+       WHERE r.rolname = 'evstation' AND d.defaclobjtype = 'f'
+       GROUP BY r.rolname`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.public_execute).toBe(false);
+  });
+});
+
+describe('app cannot create objects outside the app schema', () => {
+  test('no CREATE on the database or public schema', async () => {
+    const { rows } = await db.superuser.query<{ db_create: boolean; public_create: boolean }>(
+      `SELECT has_database_privilege('evstation_app', current_database(), 'CREATE') AS db_create,
+              has_schema_privilege('evstation_app', 'public', 'CREATE') AS public_create`,
+    );
+    expect(rows[0]).toEqual({ db_create: false, public_create: false });
+    await expect(db.app.query('CREATE TABLE public.evil (id int)')).rejects.toMatchObject({
+      code: '42501',
+    });
+    await expect(
+      db.app.query('CREATE FUNCTION public.evil() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$'),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(db.app.query('CREATE SCHEMA evil')).rejects.toMatchObject({ code: '42501' });
+  });
+});
+
+describe('offboarding is soft-delete only', () => {
+  test('app has no DELETE on tenants, users, audit_log, platform_admins, invitations', async () => {
+    for (const table of ['tenants', 'users', 'audit_log', 'platform_admins', 'invitations']) {
+      const { rows } = await db.superuser.query<{ ok: boolean }>(
+        'SELECT has_table_privilege($1, $2, $3) AS ok',
+        ['evstation_app', `app.${table}`, 'DELETE'],
+      );
+      expect(rows[0]?.ok, table).toBe(false);
+    }
+  });
+
+  test('superuser hard-delete fails when audit rows reference the user or tenant', async () => {
+    await db.superuser.query(
+      `INSERT INTO app.audit_log (tenant_id, actor_id, action, outcome)
+       VALUES ($1, $2, 'offboarding.test', 'allowed')`,
+      [A, ADMIN_A],
+    );
+    await expect(
+      db.superuser.query('DELETE FROM app.users WHERE id = $1', [ADMIN_A]),
+    ).rejects.toThrow(/audit_log is append-only/);
+    await expect(db.superuser.query('DELETE FROM app.tenants WHERE id = $1', [A])).rejects.toThrow(
+      /audit_log is append-only/,
+    );
+  });
+});
+
+describe('audit semantics', () => {
+  for (const actor of [VIEWER_A, SITE_MANAGER_A]) {
+    test(`${actor === VIEWER_A ? 'viewer' : 'site_manager'} can insert without RETURNING, but not with RETURNING`, async () => {
+      await appTx(db, { actor, tenant: A }, async (client) => {
+        const inserted = await client.query(
+          `INSERT INTO app.audit_log (tenant_id, actor_id, action, outcome)
+           VALUES ($1, $2, 'audit.probe', 'allowed')`,
+          [A, actor],
+        );
+        expect(inserted.rowCount).toBe(1);
+        await expect(
+          client.query(
+            `INSERT INTO app.audit_log (tenant_id, actor_id, action, outcome)
+             VALUES ($1, $2, 'audit.probe', 'allowed') RETURNING id`,
+            [A, actor],
+          ),
+        ).rejects.toMatchObject({ code: '42501' });
+      });
+    });
+  }
+
+  test('a denied attempt with a forged tenant is recorded with tenant_id NULL', async () => {
+    await appCommit(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      const inserted = await client.query(
+        `INSERT INTO app.audit_log (tenant_id, actor_id, action, outcome, details)
+         VALUES (NULL, $1, 'tenant.access', 'denied', $2)`,
+        [ADMIN_A, JSON.stringify({ attempted_tenant: B })],
+      );
+      expect(inserted.rowCount).toBe(1);
+    });
+    const { rows } = await db.superuser.query<{ tenant_id: string | null; outcome: string }>(
+      "SELECT tenant_id, outcome FROM app.audit_log WHERE action = 'tenant.access'",
+    );
+    expect(rows).toEqual([{ tenant_id: null, outcome: 'denied' }]);
   });
 });
 

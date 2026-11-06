@@ -83,6 +83,31 @@ First start pulls images (≈1 GB) and runs CitrineOS Sequelize migrations;
 allow a few minutes. The check runs only when the stack is not already
 running; ports 8080/3000 are skipped deliberately (reserved).
 
+## Database migrations and policy evidence
+
+Migrations are hand-written SQL in `packages/db/sql`, applied in filename
+order. Do not let drizzle-kit own role/policy/trigger DDL.
+
+```shell
+pnpm db:migrate                       # apply pending migrations (dev/test)
+pnpm db:seed                          # idempotent dev seed for the local stack
+pnpm --filter @evstation/db test      # SQL/RLS suite (testcontainers)
+```
+
+Policy performance is reproducible with the committed helper (connect as
+`evstation_app`, tenant/actor context set transaction-locally):
+
+```shell
+node packages/db/scripts/explain-policies.mjs plan sites
+node packages/db/scripts/explain-policies.mjs time sites 1000
+node packages/db/scripts/explain-policies.mjs full sites
+# also: users, memberships; seed instructions in
+# docs/evidence/phase1-policy-perf.log
+```
+
+Append new plans/timings (and machine specs) to
+`docs/evidence/phase1-policy-perf.log`; never rewrite old numbers.
+
 ## Start / stop
 
 ```shell

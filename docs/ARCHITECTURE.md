@@ -107,6 +107,29 @@ browser ──▶ dashboard :3200 (Next.js BFF)          API :4000 (Fastify)
   BYPASSRLS, not the table owner, FORCE RLS) and prove zero cross-tenant
   rows; the API isolation suite iterates the route registry.
 
+### Audit semantics (for API authors)
+
+- Audit rows are **write-only from the request path**: `evstation_app` has
+  `INSERT`/`SELECT` grants but no `UPDATE`/`DELETE`, and an append-only
+  trigger rejects both even for the table owner/superuser. Insert without
+  `RETURNING`: PostgreSQL applies the `audit_log_select` policy to returned
+  rows, and only tenant admins may read them. Viewers and site managers can
+  record allowed events but must not ask for the row back.
+- Write audit rows **in the same transaction** as the mutation they describe,
+  so an audit failure rolls the mutation back. For a denied attempt the
+  request transaction may roll back; write that row in a separate
+  transaction after the response is decided (ADR-0011).
+- `tenant_id` is the tenant the action belongs to, or `NULL` for a denied
+  attempt with a forged/unknown tenant and for platform-global actions. The
+  attempted tenant goes in `details` (e.g. `{"attempted_tenant":"…"}`), never
+  in `tenant_id`.
+- `actor_id` must equal `app.actor_id()`; the API must never accept it from
+  the payload. Include `action`, `resource_type`, `resource_id`, `outcome`
+  (`allowed`/`denied`), optional `details`, and the per-request
+  `request_id`. Never log tokens, invitation hashes/secrets, or raw headers.
+- Offboarding is soft-delete (membership removal / tenant suspension); Phase 1
+  has no hard-delete or purge endpoint. Audit history is retained.
+
 ## Decisions index
 
 Very short pointers — full reasoning in `docs/DECISIONS.md`:

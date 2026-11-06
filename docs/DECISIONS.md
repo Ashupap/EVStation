@@ -392,6 +392,25 @@ app.actor_id()` with no UPDATE/DELETE grants plus an append-only trigger
     site deletion cannot leave dangling scope entries (FKs, `ON DELETE
 CASCADE`); a deferred constraint trigger requires site managers to have
     at least one site.
+  - `tenants` UPDATE is intentionally limited to the `status` column. Renaming
+    a tenant (or changing its slug) requires a platform-admin-only
+    `SECURITY DEFINER` function if the Phase 1 API needs it; do not widen the
+    column grant.
+  - `users`/`memberships` describe **operator staff** only. EV driver
+    accounts are a separate concern (Phase 6) and must not be stored in
+    `users`/`memberships`; driver login must not receive an operator
+    membership.
+  - **New tenant tables** must use the 0014 pattern: every zero-argument
+    `app.*` stable helper appears only inside `(SELECT app.helper())`, inline
+    membership probes where an index exists, FORCE RLS, and explicit
+    least-privilege grants. Require an EXPLAIN before merge at 1M rows for the
+    table's common list query (the 100k-row evidence in
+    `docs/evidence/phase1-policy-perf.log` is the baseline).
+  - **Offboarding is soft-delete only in Phase 1.** Deactivate/suspend rather
+    than delete `users`/`tenants`; there is no purge endpoint. The append-only
+    audit trigger blocks hard deletes that would orphan audit history, so a
+    future retention/erasure feature needs an explicit, audited design (and
+    likely a separate archive).
 - **Consequences.** Hand-written SQL migrations are the source of truth for
   roles, grants, policies, triggers and functions; drizzle-kit's generated
   diffs are **not** allowed to own or regenerate policy/role DDL (guarded by
