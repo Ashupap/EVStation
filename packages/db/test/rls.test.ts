@@ -305,8 +305,8 @@ describe('tenant isolation as app role', () => {
             B,
             VIEWER_A,
           ])
-        ).message,
-      ).toMatch(/membership_change_forbidden/);
+        ).code,
+      ).toBe('42501');
     });
   });
 
@@ -317,7 +317,7 @@ describe('tenant isolation as app role', () => {
           OUTSIDER_ID,
           VIEWER_A,
         ]),
-      ).rejects.toThrow(/membership_keys_immutable/);
+      ).rejects.toMatchObject({ code: '42501' });
     });
   });
 
@@ -979,6 +979,62 @@ describe('policy shape', () => {
       expect(policy.qual, policy.policyname).toMatch(
         /SELECT app\.(tenant_id|actor_id|can_manage_tenant|actor_role|actor_site_ids)\(\)/,
       );
+    }
+  });
+});
+
+describe('least-privilege grants and defaults', () => {
+  test('app UPDATE is column-scoped to mutable fields', async () => {
+    const checks: Array<[string, string, boolean]> = [
+      ['tenants', 'status', true],
+      ['tenants', 'slug', false],
+      ['tenants', 'name', false],
+      ['memberships', 'role', true],
+      ['memberships', 'user_id', false],
+      ['memberships', 'tenant_id', false],
+      ['memberships', 'created_at', false],
+      ['sites', 'name', true],
+      ['sites', 'address', true],
+      ['sites', 'status', true],
+      ['sites', 'tenant_id', false],
+      ['sites', 'id', false],
+      ['users', 'display_name', true],
+      ['users', 'email', false],
+      ['invitations', 'revoked_at', true],
+      ['invitations', 'role', false],
+      ['invitations', 'token_hash', false],
+    ];
+    for (const [table, column, expected] of checks) {
+      const { rows } = await db.superuser.query<{ ok: boolean }>(
+        'SELECT has_column_privilege($1, $2, $3, $4) AS ok',
+        ['evstation_app', `app.${table}`, column, 'UPDATE'],
+      );
+      expect(rows[0]?.ok, `${table}.${column} UPDATE`).toBe(expected);
+    }
+    const tableUpdate = await db.superuser.query<{ ok: boolean }>(
+      "SELECT has_table_privilege('evstation_app', 'app.membership_sites', 'UPDATE') AS ok",
+    );
+    expect(tableUpdate.rows[0]?.ok).toBe(false);
+  });
+
+  test('future functions do not inherit PUBLIC EXECUTE', async () => {
+    const { rows } = await db.superuser.query<{
+      role: string;
+      public_execute: boolean;
+    }>(
+      `SELECT r.rolname AS role,
+              coalesce(bool_or(a.grantee = 0 AND a.privilege_type = 'EXECUTE'), false)
+                AS public_execute
+       FROM pg_default_acl d
+       JOIN pg_roles r ON r.oid = d.defaclrole
+       CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+       WHERE r.rolname IN ('evstation_owner', 'evstation_definer')
+         AND d.defaclobjtype = 'f'
+       GROUP BY r.rolname`,
+    );
+    expect(rows.map((row) => row.role).sort()).toEqual(['evstation_definer', 'evstation_owner']);
+    for (const row of rows) {
+      expect(row.public_execute, row.role).toBe(false);
     }
   });
 });
