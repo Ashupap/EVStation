@@ -27,13 +27,41 @@ describe('tenant context writes', () => {
       expect(match.line, `${match.file}:${match.number}`).toMatch(/, true\)/);
     }
   });
+});
 
-  it('refuses an app URL that equals the owner or migrator URL', () => {
-    const base = {
-      DATABASE_URL_APP: 'postgres://evstation_app:pw@localhost:5432/evstation',
-      DATABASE_URL_OWNER: 'postgres://evstation_app:pw@localhost:5432/evstation',
-      OIDC_ISSUER: 'http://localhost:8180/realms/evstation',
-    };
-    expect(() => loadConfig(base as NodeJS.ProcessEnv)).toThrow(/must differ/);
+describe('database role URLs', () => {
+  const base = {
+    DATABASE_URL_APP: 'postgres://evstation_app:pw@localhost:5432/evstation',
+    OIDC_ISSUER: 'http://localhost:8180/realms/evstation',
+  };
+
+  it('rejects DATABASE_URL_OWNER because the API runtime must never use it', () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        DATABASE_URL_OWNER: 'postgres://evstation_owner:pw@localhost:5432/evstation',
+      }),
+    ).toThrow(/DATABASE_URL_OWNER/);
+  });
+
+  it('rejects DATABASE_URL_MIGRATOR because the API runtime must never use it', () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        DATABASE_URL_MIGRATOR: 'postgres://evstation:pw@localhost:5432/evstation',
+      }),
+    ).toThrow(/DATABASE_URL_MIGRATOR/);
+  });
+
+  it('accepts runtime configuration without owner or migrator URLs', () => {
+    expect(loadConfig(base as NodeJS.ProcessEnv)).toMatchObject({
+      databaseUrlApp: base.DATABASE_URL_APP,
+    });
+  });
+
+  it('does not advertise owner or migrator URLs in .env.example', () => {
+    const content = readFileSync(join(import.meta.dirname, '..', '.env.example'), 'utf8');
+    expect(content).not.toContain('DATABASE_URL_OWNER');
+    expect(content).not.toContain('DATABASE_URL_MIGRATOR');
   });
 });

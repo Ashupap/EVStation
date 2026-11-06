@@ -5,8 +5,6 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   LOG_LEVEL: z.string().default('info'),
   DATABASE_URL_APP: z.string().min(1, 'DATABASE_URL_APP is required'),
-  DATABASE_URL_OWNER: z.string().min(1).optional(),
-  DATABASE_URL_MIGRATOR: z.string().min(1).optional(),
   OIDC_ISSUER: z.url(),
   OIDC_AUDIENCE: z.string().default('evstation-api'),
   OIDC_JWKS_URI: z.url().optional(),
@@ -18,8 +16,6 @@ export type ApiConfig = {
   port: number;
   logLevel: string;
   databaseUrlApp: string;
-  databaseUrlOwner?: string;
-  databaseUrlMigrator?: string;
   oidcIssuer: string;
   oidcAudience: string;
   oidcJwksUri: string;
@@ -33,25 +29,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     throw new Error(`invalid API configuration: ${details.join('; ')}`);
   }
   const value = parsed.data;
-  const jwksUri =
-    value.OIDC_JWKS_URI ?? `${value.OIDC_ISSUER.replace(/\/$/, '')}/protocol/openid-connect/certs`;
 
-  for (const [name, url] of [
-    ['DATABASE_URL_OWNER', value.DATABASE_URL_OWNER],
-    ['DATABASE_URL_MIGRATOR', value.DATABASE_URL_MIGRATOR],
-  ] as const) {
-    if (url && url === value.DATABASE_URL_APP) {
-      throw new Error(`invalid API configuration: ${name} must differ from DATABASE_URL_APP`);
+  for (const name of ['DATABASE_URL_OWNER', 'DATABASE_URL_MIGRATOR'] as const) {
+    if (env[name]) {
+      throw new Error(`invalid API configuration: ${name} must not be set for the API runtime`);
     }
   }
+
+  const jwksUri =
+    value.OIDC_JWKS_URI ?? `${value.OIDC_ISSUER.replace(/\/$/, '')}/protocol/openid-connect/certs`;
 
   return {
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
     logLevel: value.LOG_LEVEL,
     databaseUrlApp: value.DATABASE_URL_APP,
-    databaseUrlOwner: value.DATABASE_URL_OWNER,
-    databaseUrlMigrator: value.DATABASE_URL_MIGRATOR,
     oidcIssuer: value.OIDC_ISSUER.replace(/\/$/, ''),
     oidcAudience: value.OIDC_AUDIENCE,
     oidcJwksUri: jwksUri,
