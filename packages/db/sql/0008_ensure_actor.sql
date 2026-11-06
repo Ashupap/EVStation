@@ -60,7 +60,9 @@ BEGIN
     ON CONFLICT (id) DO UPDATE
       SET email = EXCLUDED.email,
           email_verified = true,
-          external_id = coalesce(app.users.external_id, EXCLUDED.external_id);
+          external_id = coalesce(app.users.external_id, EXCLUDED.external_id)
+      WHERE app.users.email IS DISTINCT FROM EXCLUDED.email
+         OR app.users.email_verified IS DISTINCT FROM EXCLUDED.email_verified;
   EXCEPTION
     WHEN unique_violation THEN
       RAISE EXCEPTION 'email_in_use';

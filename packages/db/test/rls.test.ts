@@ -681,6 +681,106 @@ describe('ensure_actor (first login)', () => {
       }),
     ).rejects.toMatchObject({ code: '42501' });
   });
+
+  test('does not update row version or updated_at when claims are unchanged', async () => {
+    const before = await appCommit(db, { actor: OUTSIDER_ID }, async (client) => {
+      const row = await client.query<{ xmin: string; updated_at: Date | null }>(
+        'SELECT xmin, updated_at FROM app.users WHERE id = $1',
+        [OUTSIDER_ID],
+      );
+      return row.rows[0];
+    });
+
+    const after = await appCommit(db, { actor: OUTSIDER_ID }, async (client) => {
+      const result = await client.query('SELECT * FROM app.ensure_actor($1, $2, true)', [
+        OUTSIDER_ID,
+        'outsider@example.com',
+      ]);
+      expect(result.rows[0]).toMatchObject({
+        id: OUTSIDER_ID,
+        email: 'outsider@example.com',
+        email_verified: true,
+      });
+
+      const row = await client.query<{ xmin: string; updated_at: Date | null }>(
+        'SELECT xmin, updated_at FROM app.users WHERE id = $1',
+        [OUTSIDER_ID],
+      );
+      return row.rows[0];
+    });
+
+    expect(after?.xmin).toBe(before?.xmin);
+    expect(after?.updated_at).toEqual(before?.updated_at);
+  });
+
+  test('updates row only when email changes and repeats leave row version unchanged', async () => {
+    const changed = await appCommit(db, { actor: OUTSIDER_ID }, async (client) => {
+      await client.query('SELECT * FROM app.ensure_actor($1, $2, true)', [
+        OUTSIDER_ID,
+        'changed@example.com',
+      ]);
+      const row = await client.query<{ xmin: string; updated_at: Date | null }>(
+        'SELECT xmin, updated_at FROM app.users WHERE id = $1',
+        [OUTSIDER_ID],
+      );
+      return row.rows[0];
+    });
+
+    expect(changed?.updated_at).not.toBeNull();
+
+    const repeated = await appCommit(db, { actor: OUTSIDER_ID }, async (client) => {
+      await client.query('SELECT * FROM app.ensure_actor($1, $2, true)', [
+        OUTSIDER_ID,
+        'changed@example.com',
+      ]);
+      const row = await client.query<{ xmin: string; updated_at: Date | null }>(
+        'SELECT xmin, updated_at FROM app.users WHERE id = $1',
+        [OUTSIDER_ID],
+      );
+      return row.rows[0];
+    });
+
+    expect(repeated?.xmin).toBe(changed?.xmin);
+    expect(repeated?.updated_at).toEqual(changed?.updated_at);
+  });
+
+  test('updates row only when email_verified changes', async () => {
+    const unverifiedId = '00000000-0000-4000-8000-000000000098';
+
+    await db.superuser.query(
+      'INSERT INTO app.users (id, email, email_verified) VALUES ($1, $2, false)',
+      [unverifiedId, 'unverified@example.com'],
+    );
+
+    const first = await appCommit(db, { actor: unverifiedId }, async (client) => {
+      await client.query('SELECT * FROM app.ensure_actor($1, $2, true)', [
+        unverifiedId,
+        'unverified@example.com',
+      ]);
+      const row = await client.query<{ xmin: string; updated_at: Date | null }>(
+        'SELECT xmin, updated_at FROM app.users WHERE id = $1',
+        [unverifiedId],
+      );
+      return row.rows[0];
+    });
+
+    expect(first?.updated_at).not.toBeNull();
+
+    const repeated = await appCommit(db, { actor: unverifiedId }, async (client) => {
+      await client.query('SELECT * FROM app.ensure_actor($1, $2, true)', [
+        unverifiedId,
+        'unverified@example.com',
+      ]);
+      const row = await client.query<{ xmin: string; updated_at: Date | null }>(
+        'SELECT xmin, updated_at FROM app.users WHERE id = $1',
+        [unverifiedId],
+      );
+      return row.rows[0];
+    });
+
+    expect(repeated?.xmin).toBe(first?.xmin);
+    expect(repeated?.updated_at).toEqual(first?.updated_at);
+  });
 });
 
 describe('guard NULL safety (direct, RLS bypassed via superuser)', () => {
