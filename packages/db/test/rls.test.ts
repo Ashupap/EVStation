@@ -566,6 +566,32 @@ describe('invitations and accept_invitation', () => {
     });
   });
 
+  test('accept_invitation is trusted under an invitee actor context (no tenant and target tenant)', async () => {
+    const noTenantInvite = await insertInvitation('actor-ctx-1@example.com', 'viewer');
+    const userId1 = '00000000-0000-4000-8000-0000000000b1';
+    await appTx(db, { actor: userId1 }, async (client) => {
+      const { rows } = await client.query('SELECT * FROM app.accept_invitation($1, $2, $3, $4)', [
+        noTenantInvite.hash,
+        userId1,
+        'actor-ctx-1@example.com',
+        true,
+      ]);
+      expect(rows[0]?.role).toBe('viewer');
+    });
+
+    const targetTenantInvite = await insertInvitation('actor-ctx-2@example.com', 'viewer');
+    const userId2 = '00000000-0000-4000-8000-0000000000b2';
+    await appTx(db, { actor: userId2, tenant: A }, async (client) => {
+      const { rows } = await client.query('SELECT * FROM app.accept_invitation($1, $2, $3, $4)', [
+        targetTenantInvite.hash,
+        userId2,
+        'actor-ctx-2@example.com',
+        true,
+      ]);
+      expect(rows[0]?.role).toBe('viewer');
+    });
+  });
+
   test('rejects wrong email, unverified email, expired and suspended-tenant invitations', async () => {
     const { hash } = await insertInvitation('invitee2@example.com', 'viewer');
     await expect(

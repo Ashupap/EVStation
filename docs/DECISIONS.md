@@ -494,3 +494,22 @@ email)` owned by `evstation_definer` (atomic: membership insert +
     are written from a separate transaction.
 - **Consequences.** Keycloak realm: `verifyEmail: true`; self-service email
   changes are disabled so the invitee email cannot be re-pointed.
+
+### ADR-0015: Trusted definer context for invitation acceptance
+
+- **Context.** `accept_invitation` is the one write path that runs before the
+  invitee has a membership. If the API sets `app.actor_id` for audit (as it
+  should), the membership guard saw "actor is not a tenant_admin" and raised
+  `role_above_actor`, rejecting a legitimate acceptance.
+- **Decision.** Guard triggers are `SECURITY INVOKER` and skip actor/role
+  checks only when `current_user = 'evstation_definer'`. `evstation_definer`
+  is NOLOGIN, is not granted to `evstation_app` or `evstation_owner`, and is
+  reachable only by executing a `SECURITY DEFINER` function owned by it, so
+  the app role cannot forge the marker via GUCs or `SET ROLE`. The acceptance
+  function itself validates the token hash, verified email, tenant status,
+  inviter authority, role and site scope (ADR-0014 and 0018).
+- **Consequences.** Any future definer-owned write function inherits this
+  trust and must perform its own authorization; guards must not be made
+  definer-owned again without auditing that path. Direct guard tests run as
+  the superuser (RLS bypassed, `current_user` not the definer) so they still
+  exercise the actor checks.
