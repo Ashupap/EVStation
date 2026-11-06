@@ -483,6 +483,28 @@ describe('membership guards', () => {
   });
 });
 
+describe('site manager scope checks', () => {
+  test('an invalid legacy site_manager row in another tenant does not block writes', async () => {
+    await db.superuser.query('ALTER TABLE app.memberships DISABLE TRIGGER memberships_site_scope');
+    try {
+      await db.superuser.query(
+        "INSERT INTO app.memberships (tenant_id, user_id, role) VALUES ($1, $2, 'site_manager')",
+        [B, OUTSIDER_ID],
+      );
+    } finally {
+      await db.superuser.query('ALTER TABLE app.memberships ENABLE TRIGGER memberships_site_scope');
+    }
+
+    await appCommit(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      const updated = await client.query(
+        "UPDATE app.memberships SET role = 'viewer' WHERE user_id = $1",
+        [VIEWER_A],
+      );
+      expect(updated.rowCount).toBe(1);
+    });
+  });
+});
+
 describe('last-admin concurrency and platform admin acting', () => {
   test('two admins demoting each other cannot leave the tenant without an admin', async () => {
     await appCommit(db, { actor: ADMIN_A, tenant: A }, async (client) => {
