@@ -1,0 +1,225 @@
+
+ RUN  v5.0.5 /home/ubuntu/EVStation
+
+stdout | packages/db/test/rls.test.ts > role attributes and object ownership > app/owner cannot bypass RLS; definer is NOLOGIN + BYPASSRLS; app owns nothing
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/rls.test.ts > role attributes and object ownership > app cannot SET ROLE owner/definer and cannot create schema objects
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > role attributes and object ownership > app/owner cannot bypass RLS; definer is NOLOGIN + BYPASSRLS; app owns nothing 154ms
+ ✓ packages/db/test/rls.test.ts > role attributes and object ownership > app cannot SET ROLE owner/definer and cannot create schema objects 105ms
+stdout | packages/db/test/rls.test.ts > role attributes and object ownership > FORCE RLS is enabled on every app table, including for the owner
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > role attributes and object ownership > FORCE RLS is enabled on every app table, including for the owner 129ms
+stdout | packages/db/test/rls.test.ts > fail-closed context > no actor and no tenant yields zero rows everywhere
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > fail-closed context > no actor and no tenant yields zero rows everywhere 139ms
+stdout | packages/db/test/rls.test.ts > fail-closed context > actor without tenant sees only their own tenants/memberships/users (switcher), never sites
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > fail-closed context > actor without tenant sees only their own tenants/memberships/users (switcher), never sites 121ms
+stdout | packages/db/test/rls.test.ts > fail-closed context > unknown actor sees nothing (except their own users row)
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > fail-closed context > unknown actor sees nothing (except their own users row) 161ms
+stdout | packages/db/test/rls.test.ts > fail-closed context > tenant helper is NULL for a non-member, even with a guessed tenant id
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > fail-closed context > tenant helper is NULL for a non-member, even with a guessed tenant id 135ms
+stdout | packages/db/test/rls.test.ts > tenant isolation as app role > tenant A context only reaches A rows; cross-tenant IDs return zero
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > tenant isolation as app role > tenant A context only reaches A rows; cross-tenant IDs return zero 145ms
+stdout | packages/db/test/rls.test.ts > tenant isolation as app role > member rows cannot be re-pointed to another user
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > tenant isolation as app role > member rows cannot be re-pointed to another user 117ms
+stdout | packages/db/test/rls.test.ts > tenant isolation as app role > users visibility: tenant_admin sees tenant members, viewer/site manager see only self
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > tenant isolation as app role > users visibility: tenant_admin sees tenant members, viewer/site manager see only self 163ms
+stdout | packages/db/test/rls.test.ts > site manager / viewer scope > site manager sees and edits only assigned sites, cannot create/delete
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > site manager / viewer scope > site manager sees and edits only assigned sites, cannot create/delete 190ms
+stdout | packages/db/test/rls.test.ts > site manager / viewer scope > viewer reads all tenant sites but cannot write any
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/rls.test.ts > platform admin > tenant directory is global; tenant-scoped reads require tenant context
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > site manager / viewer scope > viewer reads all tenant sites but cannot write any 161ms
+ ✓ packages/db/test/rls.test.ts > platform admin > tenant directory is global; tenant-scoped reads require tenant context 130ms
+stdout | packages/db/test/rls.test.ts > platform admin > platform admin can suspend a tenant; suspended tenant then fails closed
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > platform admin > platform admin can suspend a tenant; suspended tenant then fails closed 117ms
+stdout | packages/db/test/rls.test.ts > membership guards > last tenant_admin cannot be demoted or removed
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > membership guards > last tenant_admin cannot be demoted or removed 188ms
+stdout | packages/db/test/rls.test.ts > membership guards > demotion is allowed while another admin exists, then the last admin is protected
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > membership guards > demotion is allowed while another admin exists, then the last admin is protected 210ms
+stdout | packages/db/test/rls.test.ts > membership guards > tenant_admin cannot change tenant status; email edits are not granted
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > membership guards > tenant_admin cannot change tenant status; email edits are not granted 210ms
+stdout | packages/db/test/rls.test.ts > site manager scope checks > an invalid legacy site_manager row in another tenant does not block writes
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > site manager scope checks > an invalid legacy site_manager row in another tenant does not block writes 181ms
+stdout | packages/db/test/rls.test.ts > last-admin concurrency and platform admin acting > two admins demoting each other cannot leave the tenant without an admin
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > last-admin concurrency and platform admin acting > two admins demoting each other cannot leave the tenant without an admin 349ms
+stdout | packages/db/test/rls.test.ts > last-admin concurrency and platform admin acting > a platform admin acting in a tenant cannot remove its last admin
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > last-admin concurrency and platform admin acting > a platform admin acting in a tenant cannot remove its last admin 128ms
+stdout | packages/db/test/rls.test.ts > audit log > append-only and actor-bound
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > audit log > append-only and actor-bound 174ms
+stdout | packages/db/test/rls.test.ts > ensure_actor (first login) > upserts only the caller row from verified claims and syncs email
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > ensure_actor (first login) > upserts only the caller row from verified claims and syncs email 204ms
+stdout | packages/db/test/rls.test.ts > ensure_actor (first login) > rejects mismatched actor, unverified email, and does not touch other users
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > ensure_actor (first login) > rejects mismatched actor, unverified email, and does not touch other users 132ms
+stdout | packages/db/test/rls.test.ts > ensure_actor (first login) > app role still has no direct INSERT grant on users
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > ensure_actor (first login) > app role still has no direct INSERT grant on users 134ms
+stdout | packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_membership is closed when the actor has no membership (NULL helpers)
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_membership is closed when the actor has no membership (NULL helpers) 150ms
+stdout | packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_membership rejects NULL tenant context on insert
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_membership rejects NULL tenant context on insert 140ms
+stdout | packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_invitation is closed when the actor has no membership (NULL helpers)
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_invitation is closed when the actor has no membership (NULL helpers) 138ms
+stdout | packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_tenant_status is closed for non-platform actors
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > guard NULL safety (direct, RLS bypassed via superuser) > guard_tenant_status is closed for non-platform actors 156ms
+stdout | packages/db/test/rls.test.ts > malformed context fails closed > garbage actor/tenant UUIDs yield no rows instead of an error
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > malformed context fails closed > garbage actor/tenant UUIDs yield no rows instead of an error 138ms
+stdout | packages/db/test/rls.test.ts > owner-owned SECURITY DEFINER regression (ADR-0011) > a definer function owned by evstation_owner is still RLS-filtered
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > owner-owned SECURITY DEFINER regression (ADR-0011) > a definer function owned by evstation_owner is still RLS-filtered 113ms
+stdout | packages/db/test/rls.test.ts > invitations and accept_invitation > accepts a valid invitation, creates the user + membership, and marks it used
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitations and accept_invitation > accepts a valid invitation, creates the user + membership, and marks it used 187ms
+stdout | packages/db/test/rls.test.ts > invitations and accept_invitation > accept_invitation is trusted under an invitee actor context (no tenant and target tenant)
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitations and accept_invitation > accept_invitation is trusted under an invitee actor context (no tenant and target tenant) 182ms
+stdout | packages/db/test/rls.test.ts > invitations and accept_invitation > rejects wrong email, unverified email, expired and suspended-tenant invitations
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitations and accept_invitation > rejects wrong email, unverified email, expired and suspended-tenant invitations 148ms
+stdout | packages/db/test/rls.test.ts > invitations and accept_invitation > site_manager invitation requires a valid site and creates scoped membership
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitations and accept_invitation > site_manager invitation requires a valid site and creates scoped membership 178ms
+stdout | packages/db/test/rls.test.ts > invitations and accept_invitation > rejects already-members and non-hash tokens
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitations and accept_invitation > rejects already-members and non-hash tokens 132ms
+stdout | packages/db/test/rls.test.ts > invitation authority hardening > app cannot rewrite invitation authority fields after insert
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitation authority hardening > app cannot rewrite invitation authority fields after insert 152ms
+stdout | packages/db/test/rls.test.ts > invitation authority hardening > acceptance re-checks that the inviter is still authorized
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitation authority hardening > acceptance re-checks that the inviter is still authorized 177ms
+stdout | packages/db/test/rls.test.ts > invitation authority hardening > records an audit_log row when an invitation is accepted
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitation authority hardening > records an audit_log row when an invitation is accepted 121ms
+stdout | packages/db/test/rls.test.ts > invitation email verification NULL safety > NULL p_email_verified is rejected
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > invitation email verification NULL safety > NULL p_email_verified is rejected 147ms
+stdout | packages/db/test/rls.test.ts > policy shape > every RLS policy hoists zero-argument helpers into scalar subqueries
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > policy shape > every RLS policy hoists zero-argument helpers into scalar subqueries 122ms
+stdout | packages/db/test/rls.test.ts > least-privilege grants and defaults > app UPDATE is column-scoped to mutable fields
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > least-privilege grants and defaults > app UPDATE is column-scoped to mutable fields 128ms
+stdout | packages/db/test/rls.test.ts > least-privilege grants and defaults > future functions do not inherit PUBLIC EXECUTE
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > least-privilege grants and defaults > future functions do not inherit PUBLIC EXECUTE 125ms
+stdout | packages/db/test/rls.test.ts > committed context does not leak on a pooled connection > after a committed tenant transaction, no-context reads are empty
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > committed context does not leak on a pooled connection > after a committed tenant transaction, no-context reads are empty 148ms
+stdout | packages/db/test/rls.test.ts > database catalog invariants > every app function has a closed ACL and a pinned search_path
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > database catalog invariants > every app function has a closed ACL and a pinned search_path 114ms
+stdout | packages/db/test/rls.test.ts > database catalog invariants > app views use security_invoker
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > database catalog invariants > app views use security_invoker 127ms
+stdout | packages/db/test/rls.test.ts > database catalog invariants > app table privileges are the least-privilege matrix; PUBLIC has none
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > database catalog invariants > app table privileges are the least-privilege matrix; PUBLIC has none 148ms
+stdout | packages/db/test/rls.test.ts > database catalog invariants > migration/superuser default privileges close future function EXECUTE
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/rls.test.ts > app cannot create objects outside the app schema > no CREATE on the database or public schema
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > database catalog invariants > migration/superuser default privileges close future function EXECUTE 106ms
+ ✓ packages/db/test/rls.test.ts > app cannot create objects outside the app schema > no CREATE on the database or public schema 97ms
+stdout | packages/db/test/rls.test.ts > offboarding is soft-delete only > app has no DELETE on tenants, users, audit_log, platform_admins, invitations
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > offboarding is soft-delete only > app has no DELETE on tenants, users, audit_log, platform_admins, invitations 131ms
+stdout | packages/db/test/rls.test.ts > offboarding is soft-delete only > superuser hard-delete fails when audit rows reference the user or tenant
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > offboarding is soft-delete only > superuser hard-delete fails when audit rows reference the user or tenant 115ms
+stdout | packages/db/test/rls.test.ts > audit semantics > viewer can insert without RETURNING, but not with RETURNING
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > audit semantics > viewer can insert without RETURNING, but not with RETURNING 112ms
+stdout | packages/db/test/rls.test.ts > audit semantics > site_manager can insert without RETURNING, but not with RETURNING
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > audit semantics > site_manager can insert without RETURNING, but not with RETURNING 118ms
+stdout | packages/db/test/rls.test.ts > audit semantics > a denied attempt with a forged tenant is recorded with tenant_id NULL
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/rls.test.ts > boot preconditions (shared constants) > seed ids are stable and role passwords are distinct
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ✓ packages/db/test/rls.test.ts > audit semantics > a denied attempt with a forged tenant is recorded with tenant_id NULL 112ms
+ ✓ packages/db/test/rls.test.ts > boot preconditions (shared constants) > seed ids are stable and role passwords are distinct 98ms
+
+ Test Files  1 passed (1)
+      Tests  54 passed (54)
+   Start at  10:56:30
+   Duration  21.71s (tests 96%, import 4%)
+

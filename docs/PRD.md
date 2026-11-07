@@ -122,7 +122,7 @@ Notes: `station_ref` must be unique across the platform (it is the identity the 
 | --- | --- | --- | --- | --- |
 | Create/suspend tenants | Yes | No | No | No |
 | Invite and manage users in own tenant | Yes | Yes | No | No |
-| Create/edit sites | Yes | Yes | Own sites | No |
+| Create/edit sites | Yes | Yes | Edit own sites only (no create/delete) | No |
 | Register/edit stations | Yes | Yes | Own sites | No |
 | View stations, sessions, alerts | Yes | Yes | Own sites | Own tenant (read-only) |
 | Send remote commands | Yes | Yes | Own sites | No |
@@ -131,3 +131,49 @@ Notes: `station_ref` must be unique across the platform (it is the identity the 
 | View audit log | Yes | Yes | No | No |
 
 A platform admin acting inside a tenant must be recorded in the audit log with a clear "acting as" marker.
+
+## Phase 1: Authentication, tenants and row-level security
+
+**Goal:** secure login and a tenant model where isolation is enforced by the database, with automated proof.
+
+**Tasks**
+
+1. Implement the schema for `tenants`, `users`, `memberships`, `platform_admins`, and `sites` with migrations.
+2. Integrate Keycloak OIDC: the API verifies JWTs (signature, issuer, audience, expiry). Map the token subject to `users`.
+3. Implement RLS policies on all tenant-scoped tables. The API sets a per-request database setting (for example `app.tenant_id`) inside a transaction. Use a database role for the app that cannot bypass RLS.
+4. Implement a permission layer from the matrix in Section 7. Centralize it (one `authorize(user, action, resource)` module); do not scatter role checks.
+5. Endpoints: `POST/GET/PATCH /tenants` (platform admin), `POST /tenants/:id/invitations`, `GET/PATCH /me`, `GET/POST/PATCH /sites`, `GET /users`, role changes.
+6. Seed script: one platform admin, two tenants with a few users each, to support isolation tests.
+7. Dashboard shell only: login via Keycloak, tenant switcher for users with multiple memberships, empty home page, role-aware navigation.
+
+**Acceptance criteria**
+
+- A user from tenant A cannot read, list, update, or delete any tenant B resource through any endpoint, by ID guessing or otherwise.
+- A request with a forged `tenant_id` in the body/query is ignored or rejected.
+- Direct database queries as the app role return zero cross-tenant rows (RLS proven independently of API code).
+- Expired, wrong-audience, and tampered tokens are rejected with 401.
+- Role matrix is enforced: each denied action returns 403 with a consistent error body.
+
+**Tests (mandatory)**
+
+- An **isolation test suite** that iterates over every tenant-scoped endpoint and verifies cross-tenant access fails. New endpoints must be added to this suite automatically (for example by iterating over the route registry) so future phases cannot forget it.
+- RLS tests at the SQL level using the app role.
+- Permission matrix tests: one test per role per capability.
+- Playwright test: login, wrong-role navigation is blocked.
+
+### Additional Phase 1 criteria (approved extras)
+
+These were approved alongside the section above and are equally binding:
+
+- Invitations are stored and have an accept flow; email delivery is a logged
+  stub behind an interface until Phase 5 (no tokens in logs).
+- Every security-relevant action is audited (tenant create/suspend, role
+  changes, invitations, platform-admin "acting as").
+- The dashboard session is server-side (opaque session cookie), tokens never
+  reach browser JavaScript or storage, and state-changing BFF requests are
+  CSRF-protected.
+- A production-like compose overlay sets
+  `allowUnknownChargingStations: false`; a test proves an unregistered
+  station is refused while a commissioned station boots.
+- OpenAPI is generated from code; errors always use
+  `{ error: { code, message, details? } }`.

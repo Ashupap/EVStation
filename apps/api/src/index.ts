@@ -1,8 +1,17 @@
 /**
  * Fastify API service — HTTP surface of the EVStation CMS.
  *
- * Placeholder until Phase 1 (auth, tenancy) and Phase 2 (stations,
- * operations) per the PRD. Fastify + Zod are introduced when the first
- * real endpoints land; see docs/ARCHITECTURE.md.
+ * Phase 1: Keycloak JWT verification, one transaction per request, RLS tenant
+ * context, centralized authorization and auditing. See docs/ARCHITECTURE.md.
  */
-export const SERVICE_NAME = 'evstation-api';
+export { SERVICE_NAME, buildApp } from './app.js';
+export { createJwtVerifier } from './auth.js';
+export type { TokenClaims, TokenVerifier } from './auth.js';
+export { loadConfig } from './config.js';
+export type { ApiConfig } from './config.js';
+export { assertRuntimeRole, createDb, inspectRuntimeRole } from './db.js';
+export type { ApiDb } from './db.js';
+export { authorize, roleFor } from './authorize.js';
+export type { Capability } from './authorize.js';
+export { ROUTES } from './routes.js';
+export type { RouteDefinition } from './routes.js';
