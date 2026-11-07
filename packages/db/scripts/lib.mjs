@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -62,13 +63,20 @@ export function dbCredentials() {
   };
 }
 
+export function checksumSql(sql) {
+  return createHash('sha256').update(sql).digest('hex');
+}
+
 export function migrationFiles() {
   const dir = path.join(dbRoot, 'sql');
   return fs
     .readdirSync(dir)
     .filter((file) => file.endsWith('.sql'))
     .sort()
-    .map((file) => ({ file, sql: fs.readFileSync(path.join(dir, file), 'utf8') }));
+    .map((file) => {
+      const sql = fs.readFileSync(path.join(dir, file), 'utf8');
+      return { file, sql, checksum: checksumSql(sql) };
+    });
 }
 
 export function isCliEntry(metaUrl) {

@@ -30,16 +30,41 @@ export async function migrate({ migratorUrl, ownerPassword, appPassword, log = (
         applied_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-    const { rows } = await client.query('SELECT filename FROM public.schema_migrations');
-    const applied = new Set(rows.map((row) => row.filename));
+    await client.query(
+      'ALTER TABLE public.schema_migrations ADD COLUMN IF NOT EXISTS checksum text',
+    );
+    const { rows } = await client.query('SELECT filename, checksum FROM public.schema_migrations');
+    const applied = new Map(rows.map((row) => [row.filename, row.checksum]));
 
-    for (const { file, sql } of migrationFiles()) {
+    const migrations = migrationFiles();
+    for (const { file, checksum } of migrations) {
+      if (!applied.has(file)) continue;
+      const recorded = applied.get(file);
+      if (recorded === checksum) continue;
+      if (recorded === null) {
+        await client.query(
+          'UPDATE public.schema_migrations SET checksum = $2 WHERE filename = $1',
+          [file, checksum],
+        );
+        log(`baselined checksum for ${file}`);
+        continue;
+      }
+      throw new Error(
+        `migration ${file} checksum mismatch: applied ${recorded}, current ${checksum}. ` +
+          'Applied migrations are immutable; add a new migration instead of editing it.',
+      );
+    }
+
+    for (const { file, sql, checksum } of migrations) {
       if (applied.has(file)) continue;
       log(`applying ${file}`);
       await client.query('BEGIN');
       try {
         await client.query(sql);
-        await client.query('INSERT INTO public.schema_migrations (filename) VALUES ($1)', [file]);
+        await client.query(
+          'INSERT INTO public.schema_migrations (filename, checksum) VALUES ($1, $2)',
+          [file, checksum],
+        );
         await client.query('COMMIT');
         log(`applied ${file}`);
       } catch (error) {
