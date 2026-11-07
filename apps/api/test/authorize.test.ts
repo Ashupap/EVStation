@@ -44,6 +44,7 @@ const capabilities: Capability[] = [
   'invitation.read',
   'invitation.create',
   'invitation.revoke',
+  'invitation.accept',
   'audit.read',
 ];
 
@@ -70,6 +71,7 @@ describe('permission matrix (one assertion per role per capability)', () => {
       'invitation.read',
       'invitation.create',
       'invitation.revoke',
+      'invitation.accept',
       'audit.read',
     ]);
     for (const capability of capabilities) {
@@ -80,7 +82,13 @@ describe('permission matrix (one assertion per role per capability)', () => {
   });
 
   it('site manager may read and edit only sites in scope', () => {
-    const allowed = new Set<Capability>(['me.read', 'me.update', 'site.read', 'site.update']);
+    const allowed = new Set<Capability>([
+      'me.read',
+      'me.update',
+      'site.read',
+      'site.update',
+      'invitation.accept',
+    ]);
     for (const capability of capabilities) {
       expect(authorize(principal('site_manager'), TENANT, capability, { siteId: SITE })).toBe(
         allowed.has(capability),
@@ -93,7 +101,7 @@ describe('permission matrix (one assertion per role per capability)', () => {
   });
 
   it('viewer is read-only for sites', () => {
-    const allowed = new Set<Capability>(['me.read', 'me.update', 'site.read']);
+    const allowed = new Set<Capability>(['me.read', 'me.update', 'site.read', 'invitation.accept']);
     for (const capability of capabilities) {
       expect(authorize(principal('viewer'), TENANT, capability)).toBe(allowed.has(capability));
     }

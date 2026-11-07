@@ -1,6 +1,12 @@
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 import { AppError } from './errors.js';
 
+declare module 'fastify' {
+  interface FastifyRequest {
+    claims?: TokenClaims;
+  }
+}
+
 export interface TokenClaims {
   sub: string;
   email: string;
@@ -8,6 +14,8 @@ export interface TokenClaims {
   name?: string;
   preferred_username?: string;
 }
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface TokenVerifier {
   verify(token: string): Promise<TokenClaims>;
@@ -36,9 +44,10 @@ export function createJwtVerifier(options: JwtVerifierOptions): TokenVerifier {
       const { payload } = await jwtVerify(token, keySet, {
         issuer: options.issuer,
         audience: options.audience,
+        algorithms: ['RS256'],
       });
-      if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
-        throw new AppError(401, 'UNAUTHORIZED', 'token is missing a subject');
+      if (typeof payload.sub !== 'string' || !UUID_PATTERN.test(payload.sub)) {
+        throw new AppError(401, 'UNAUTHORIZED', 'token subject must be a UUID');
       }
       if (typeof payload.email !== 'string' || payload.email.length === 0) {
         throw new AppError(401, 'UNAUTHORIZED', 'token is missing an email');

@@ -536,3 +536,32 @@ email)` owned by `evstation_definer` (atomic: membership insert +
   definer-owned again without auditing that path. Direct guard tests run as
   the superuser (RLS bypassed, `current_user` not the definer) so they still
   exercise the actor checks.
+
+### ADR-0016: Keycloak email changes and local email collisions
+
+- **Context.** The API keys users by Keycloak `sub` but stores a unique,
+  case-insensitive email for invitation matching. If an operator enables
+  self-service email changes, or a person deletes and recreates a Keycloak
+  account with an email still held by an old local row, the next request can
+  try to move an email that already belongs to another `app.users.id`.
+- **Decision.**
+  - Keycloak self-service email editing remains disabled in Phase 1
+    (ADR-0014). The API still treats a verified email change from an
+    administrative Keycloak update as authoritative for that same `sub`:
+    `app.ensure_actor` updates the row on the next request.
+  - The local email column stays unique. If the new email is already attached
+    to a different `sub`, the unique violation is deliberately mapped to
+    `409 EMAIL_IN_USE`; the API does not merge accounts, memberships or audit
+    history automatically.
+  - Resolution is administrative and explicit: an operator must decide which
+    Keycloak identity owns the person, free or change the conflicting email
+    (or deactivate the stale local identity), then let the intended `sub`
+    retry. A recreated Keycloak account is a new identity, not a silent
+    takeover of the old membership set.
+  - Invitation acceptance uses the same verified, case-insensitive email
+    comparison. It never re-points an existing user row by email; a mismatch
+    or collision fails closed.
+- **Consequences.** Email collisions surface as an actionable `409`, not a
+  login loop or cross-account merge. Supporting self-service email changes in
+  a later phase requires an explicit identity-link/merge workflow, not just
+  enabling the Keycloak setting.

@@ -40,6 +40,7 @@ const PG_MESSAGES: Record<string, { status: number; code: string }> = {
   inviter_not_authorized: { status: 409, code: 'INVITER_NOT_AUTHORIZED' },
   invitation_expiry_invalid: { status: 400, code: 'INVITATION_EXPIRY_INVALID' },
   site_required: { status: 400, code: 'SITE_REQUIRED' },
+  site_manager_requires_site: { status: 400, code: 'SITE_REQUIRED' },
   invalid_site_scope: { status: 400, code: 'INVALID_SITE_SCOPE' },
   site_scope_not_allowed: { status: 400, code: 'SITE_SCOPE_NOT_ALLOWED' },
   already_member: { status: 409, code: 'ALREADY_MEMBER' },

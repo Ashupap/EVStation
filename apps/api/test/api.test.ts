@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resetDb, startDb, stopDb, type TestDb } from '../../../packages/db/test/helpers.js';
 import { ROUTES } from '../src/routes.js';
-import { buildApp } from '../src/app.js';
+import { BODY_LIMIT_BYTES, buildApp } from '../src/app.js';
 import type { TokenClaims, TokenVerifier } from '../src/auth.js';
 import type { ApiConfig } from '../src/config.js';
 import { assertRuntimeRole, createDb, inspectRuntimeRole, type ApiDb } from '../src/db.js';
+import { MemoryMailer } from '../src/mailer.js';
 
 const IDS = {
   platform: '00000000-0000-4000-8000-000000000001',
@@ -52,6 +53,7 @@ const verifier: TokenVerifier = {
 const config: ApiConfig = {
   nodeEnv: 'test',
   port: 0,
+  host: '127.0.0.1',
   logLevel: 'silent',
   databaseUrlApp: '',
   oidcIssuer: 'http://keycloak.test/realms/evstation',
@@ -63,6 +65,8 @@ const config: ApiConfig = {
 let db: TestDb;
 let apiDb: ApiDb;
 let app: Awaited<ReturnType<typeof buildApp>>;
+const mailer = new MemoryMailer();
+const registeredRoutes: string[] = [];
 
 function auth(token: string) {
   return { authorization: `Bearer ${token}` };
@@ -72,7 +76,20 @@ beforeAll(async () => {
   db = await startDb();
   apiDb = createDb(db.appUrl, 4);
   config.databaseUrlApp = db.appUrl;
-  app = await buildApp({ db: apiDb, config, verifier, logger: false });
+  app = await buildApp({
+    db: apiDb,
+    config,
+    verifier,
+    mailer,
+    rateLimit: { max: 10_000, timeWindow: 60_000 },
+    logger: false,
+    onRoute: (route) => {
+      const methods = Array.isArray(route.method) ? route.method : [route.method];
+      for (const method of methods) {
+        if (method !== 'HEAD') registeredRoutes.push(`${method} ${route.url}`);
+      }
+    },
+  });
   await app.ready();
 });
 
@@ -84,15 +101,44 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetDb(db);
+  mailer.outbox.length = 0;
 });
 
 describe('skeleton and runtime role', () => {
-  it('serves liveness/readiness and generated OpenAPI', async () => {
+  it('serves liveness/readiness but gates docs outside development', async () => {
     expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
     expect((await app.inject({ method: 'GET', url: '/health/ready' })).statusCode).toBe(200);
-    const spec = await app.inject({ method: 'GET', url: '/openapi.json' });
-    expect(spec.statusCode).toBe(200);
-    expect(spec.json().paths['/sites']).toBeTruthy();
+    expect((await app.inject({ method: 'GET', url: '/openapi.json' })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: '/docs' })).statusCode).toBe(404);
+  });
+
+  it('serves generated OpenAPI in development', async () => {
+    const dev = await buildApp({
+      db: apiDb,
+      config: { ...config, nodeEnv: 'development' },
+      verifier,
+      mailer,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    await dev.ready();
+    try {
+      const spec = await dev.inject({ method: 'GET', url: '/openapi.json' });
+      expect(spec.statusCode).toBe(200);
+      expect(spec.json().paths['/sites']).toBeTruthy();
+      expect((await dev.inject({ method: 'GET', url: '/docs' })).statusCode).toBe(200);
+    } finally {
+      await dev.close();
+    }
+  });
+
+  it('applies explicit HTTP and pg limits', async () => {
+    expect(BODY_LIMIT_BYTES).toBe(64 * 1024);
+    expect(apiDb.pool.options.connectionTimeoutMillis).toBe(5_000);
+    expect(apiDb.pool.options.statement_timeout).toBe(10_000);
+    expect(apiDb.pool.options.query_timeout).toBe(10_000);
+    expect(apiDb.pool.options.lock_timeout).toBe(5_000);
+    expect(apiDb.pool.options.idle_in_transaction_session_timeout).toBe(15_000);
   });
 
   it('connects as the RLS runtime role, never superuser/BYPASSRLS', async () => {
@@ -121,6 +167,48 @@ describe('authentication', () => {
       (await app.inject({ method: 'GET', url: '/me', headers: auth('nope') })).statusCode,
     ).toBe(401);
   });
+
+  it('authenticates before parsing a malformed unauthenticated body', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/sites',
+      headers: { 'content-type': 'application/json' },
+      payload: '{"name":',
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ error: { code: 'UNAUTHORIZED' } });
+  });
+
+  it('rejects an authenticated body over the explicit limit with 413', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/sites',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: { name: 'x'.repeat(BODY_LIMIT_BYTES) },
+    });
+    expect(response.statusCode).toBe(413);
+  });
+
+  it('rate-limits requests with the API error shape', async () => {
+    const limited = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      rateLimit: { max: 2, timeWindow: 60_000 },
+      logger: false,
+    });
+    await limited.ready();
+    try {
+      expect((await limited.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+      expect((await limited.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+      const response = await limited.inject({ method: 'GET', url: '/health' });
+      expect(response.statusCode).toBe(429);
+      expect(response.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
+    } finally {
+      await limited.close();
+    }
+  });
 });
 
 describe('principal and me', () => {
@@ -146,7 +234,7 @@ describe('principal and me', () => {
       method: 'PATCH',
       url: '/me',
       headers: auth('viewerA'),
-      payload: { display_name: 'Acme Viewer Updated', email: 'nope@example.com' },
+      payload: { display_name: 'Acme Viewer Updated' },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ id: IDS.viewerA, display_name: 'Acme Viewer Updated' });
@@ -154,6 +242,15 @@ describe('principal and me', () => {
       IDS.viewerA,
     ]);
     expect(row.rows[0].email).toBe('viewer@acme.example');
+
+    const strict = await app.inject({
+      method: 'PATCH',
+      url: '/me',
+      headers: auth('viewerA'),
+      payload: { display_name: 'Nope', email: 'nope@example.com' },
+    });
+    expect(strict.statusCode).toBe(400);
+    expect(strict.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
   });
 });
 
@@ -193,15 +290,24 @@ describe('tenant context resolution', () => {
     expect(response.json()).toMatchObject({ error: { code: 'TENANT_SUSPENDED' } });
   });
 
-  it('ignores a forged tenant_id in the body', async () => {
-    const response = await app.inject({
+  it('rejects a forged tenant_id field in the body', async () => {
+    const forged = await app.inject({
       method: 'POST',
       url: '/sites',
       headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
       payload: { name: 'Forged probe', tenant_id: IDS.tenantB },
     });
-    expect(response.statusCode).toBe(201);
-    expect(response.json().tenant_id).toBe(IDS.tenantA);
+    expect(forged.statusCode).toBe(400);
+    expect(forged.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+
+    const valid = await app.inject({
+      method: 'POST',
+      url: '/sites',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: { name: 'Tenant from header' },
+    });
+    expect(valid.statusCode).toBe(201);
+    expect(valid.json().tenant_id).toBe(IDS.tenantA);
   });
 });
 
@@ -309,7 +415,99 @@ describe('tenant and permission matrix', () => {
   });
 });
 
+function requestedUrl(route: (typeof ROUTES)[number], tenantId = IDS.tenantA): string {
+  let url = route.url;
+  if (typeof route.tenantSource === 'object') {
+    url = url.replace(`:${route.tenantSource.param}`, tenantId);
+  }
+  for (const [name, value] of Object.entries(route.isolation?.params ?? {})) {
+    url = url.replace(`:${name}`, value);
+  }
+  return url;
+}
+
 describe('cross-tenant isolation suite (registry-driven)', () => {
+  it('registers exactly ROUTES plus the health allow-list', () => {
+    const expected = [
+      ...ROUTES.map((route) => `${route.method} ${route.url}`),
+      'GET /health',
+      'GET /health/ready',
+    ].sort();
+    expect(registeredRoutes.sort()).toEqual(expected);
+  });
+
+  it('returns 401 for every registered API route without a token', async () => {
+    for (const route of ROUTES) {
+      const response = await app.inject({
+        method: route.method,
+        url: requestedUrl(route),
+        ...(route.isolation?.body ? { payload: route.isolation.body } : {}),
+      });
+      expect(response.statusCode, `${route.method} ${route.url}`).toBe(401);
+    }
+  });
+
+  it('returns only caller-tenant rows from every tenant list endpoint', async () => {
+    const acmeSites = await app.inject({
+      method: 'GET',
+      url: '/sites',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(acmeSites.json().sites.map((site: { tenant_id: string }) => site.tenant_id)).toEqual([
+      IDS.tenantA,
+      IDS.tenantA,
+    ]);
+
+    const betaSites = await app.inject({
+      method: 'GET',
+      url: '/sites',
+      headers: { ...auth('adminB'), 'x-tenant-id': IDS.tenantB },
+    });
+    expect(betaSites.json().sites.map((site: { tenant_id: string }) => site.tenant_id)).toEqual([
+      IDS.tenantB,
+    ]);
+
+    const acmeUsers = await app.inject({
+      method: 'GET',
+      url: '/users',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(acmeUsers.json().users.map((user: { id: string }) => user.id)).not.toContain(IDS.adminB);
+
+    await app.inject({
+      method: 'POST',
+      url: `/tenants/${IDS.tenantA}/invitations`,
+      headers: auth('adminA'),
+      payload: { email: 'acme-invite@example.com', role: 'viewer' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/tenants/${IDS.tenantB}/invitations`,
+      headers: auth('adminB'),
+      payload: { email: 'beta-invite@example.com', role: 'viewer' },
+    });
+    const acmeInvitations = await app.inject({
+      method: 'GET',
+      url: `/tenants/${IDS.tenantA}/invitations`,
+      headers: auth('adminA'),
+    });
+    expect(
+      acmeInvitations.json().invitations.map((invitation: { email: string }) => invitation.email),
+    ).toEqual(['acme-invite@example.com']);
+
+    const tenants = await app.inject({
+      method: 'GET',
+      url: '/tenants',
+      headers: auth('platform'),
+    });
+    expect(
+      tenants
+        .json()
+        .tenants.map((tenant: { id: string }) => tenant.id)
+        .sort(),
+    ).toEqual([IDS.tenantA, IDS.tenantB].sort());
+  });
+
   it('denies every tenant-scoped route when another tenant is requested', async () => {
     const tenantRoutes = ROUTES.filter((route) => route.tenantSource !== 'none');
     expect(tenantRoutes.length).toBeGreaterThanOrEqual(8);
@@ -354,6 +552,53 @@ describe('cross-tenant isolation suite (registry-driven)', () => {
   });
 });
 
+describe('pagination', () => {
+  it('pages sites, users and tenants with a limit and opaque cursor', async () => {
+    const firstSites = await app.inject({
+      method: 'GET',
+      url: '/sites?limit=1',
+      headers: auth('adminA'),
+    });
+    expect(firstSites.statusCode).toBe(200);
+    expect(firstSites.json().sites).toHaveLength(1);
+    expect(firstSites.json().next_cursor).toEqual(expect.any(String));
+
+    const secondSites = await app.inject({
+      method: 'GET',
+      url: `/sites?limit=1&cursor=${encodeURIComponent(firstSites.json().next_cursor)}`,
+      headers: auth('adminA'),
+    });
+    expect(secondSites.statusCode).toBe(200);
+    expect(secondSites.json().sites).toHaveLength(1);
+    expect(secondSites.json().sites[0].id).not.toBe(firstSites.json().sites[0].id);
+    expect(secondSites.json().next_cursor).toBeNull();
+
+    const firstUsers = await app.inject({
+      method: 'GET',
+      url: '/users?limit=1',
+      headers: auth('adminA'),
+    });
+    expect(firstUsers.json().users).toHaveLength(1);
+    expect(firstUsers.json().next_cursor).toEqual(expect.any(String));
+
+    const firstTenants = await app.inject({
+      method: 'GET',
+      url: '/tenants?limit=1',
+      headers: auth('platform'),
+    });
+    expect(firstTenants.json().tenants).toHaveLength(1);
+    expect(firstTenants.json().next_cursor).toEqual(expect.any(String));
+
+    const invalid = await app.inject({
+      method: 'GET',
+      url: '/sites?cursor=not-a-cursor',
+      headers: auth('adminA'),
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: { code: 'INVALID_CURSOR' } });
+  });
+});
+
 describe('invitations', () => {
   it('creates, accepts, and audits an invitation', async () => {
     const created = await app.inject({
@@ -364,8 +609,17 @@ describe('invitations', () => {
     });
     expect(created.statusCode).toBe(201);
     const body = created.json() as { accept_url: string; id: string };
-    const token = new URL(body.accept_url).searchParams.get('token');
+    const url = new URL(body.accept_url);
+    expect(url.search).toBe('');
+    const token = new URLSearchParams(url.hash.slice(1)).get('token');
     expect(token).toBeTruthy();
+    expect(mailer.outbox).toHaveLength(1);
+    expect(mailer.outbox[0]).toMatchObject({
+      invitationId: body.id,
+      tenantId: IDS.tenantA,
+      to: 'invitee@example.com',
+    });
+    expect(mailer.outbox[0]?.acceptUrl).toBe(body.accept_url);
 
     const unverified = await app.inject({
       method: 'POST',
@@ -402,7 +656,7 @@ describe('invitations', () => {
       payload: { email: 'invitee@example.com', role: 'viewer' },
     });
     const body = created.json() as { accept_url: string; id: string };
-    const token = new URL(body.accept_url).searchParams.get('token');
+    const token = new URLSearchParams(new URL(body.accept_url).hash.slice(1)).get('token');
 
     const revoked = await app.inject({
       method: 'DELETE',
@@ -419,6 +673,97 @@ describe('invitations', () => {
     });
     expect(accepted.statusCode).toBe(400);
     expect(accepted.json()).toMatchObject({ error: { code: 'INVITATION_INVALID' } });
+  });
+});
+
+describe('invitation delivery', () => {
+  it('never returns a token in production but queues a fragment URL', async () => {
+    const productionMailer = new MemoryMailer();
+    const production = await buildApp({
+      db: apiDb,
+      config: {
+        ...config,
+        nodeEnv: 'production',
+        oidcIssuer: 'https://keycloak.test/realms/evstation',
+        oidcJwksUri: 'https://keycloak.test/realms/evstation/certs',
+      },
+      verifier,
+      mailer: productionMailer,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    await production.ready();
+    try {
+      const created = await production.inject({
+        method: 'POST',
+        url: `/tenants/${IDS.tenantA}/invitations`,
+        headers: auth('adminA'),
+        payload: { email: 'prod-invite@example.com', role: 'viewer' },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).not.toHaveProperty('accept_url');
+      const message = productionMailer.outbox[0];
+      expect(message?.to).toBe('prod-invite@example.com');
+      expect(message?.acceptUrl).toContain('#token=');
+      expect(new URL(message!.acceptUrl).search).toBe('');
+    } finally {
+      await production.close();
+    }
+  });
+});
+
+describe('role changes with site scope', () => {
+  it('promotes and demotes a site_manager with membership_sites in one transaction', async () => {
+    const promoted = await app.inject({
+      method: 'PATCH',
+      url: `/users/${IDS.viewerA}/role`,
+      headers: auth('adminA'),
+      payload: { role: 'site_manager', site_ids: [IDS.siteA1] },
+    });
+    expect(promoted.statusCode).toBe(200);
+    expect(promoted.json()).toMatchObject({ user_id: IDS.viewerA, role: 'site_manager' });
+    const promotedScope = await db.superuser.query(
+      `SELECT ms.site_id FROM app.membership_sites ms
+       JOIN app.memberships m ON m.id = ms.membership_id
+       WHERE m.user_id = $1 AND m.tenant_id = $2`,
+      [IDS.viewerA, IDS.tenantA],
+    );
+    expect(promotedScope.rows.map((row) => row.site_id)).toEqual([IDS.siteA1]);
+
+    const demoted = await app.inject({
+      method: 'PATCH',
+      url: `/users/${IDS.viewerA}/role`,
+      headers: auth('adminA'),
+      payload: { role: 'viewer' },
+    });
+    expect(demoted.statusCode).toBe(200);
+    const demotedScope = await db.superuser.query(
+      `SELECT ms.site_id FROM app.membership_sites ms
+       JOIN app.memberships m ON m.id = ms.membership_id
+       WHERE m.user_id = $1 AND m.tenant_id = $2`,
+      [IDS.viewerA, IDS.tenantA],
+    );
+    expect(demotedScope.rows).toEqual([]);
+  });
+
+  it('rejects missing and foreign site scopes', async () => {
+    const missing = await app.inject({
+      method: 'PATCH',
+      url: `/users/${IDS.viewerA}/role`,
+      headers: auth('adminA'),
+      payload: { role: 'site_manager' },
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json()).toMatchObject({ error: { code: 'SITE_REQUIRED' } });
+
+    const foreign = await app.inject({
+      method: 'PATCH',
+      url: `/users/${IDS.viewerA}/role`,
+      headers: auth('adminA'),
+      payload: { role: 'site_manager', site_ids: [IDS.siteB1] },
+    });
+    expect(foreign.statusCode).toBe(400);
+    expect(foreign.json()).toMatchObject({ error: { code: 'INVALID_SITE_SCOPE' } });
   });
 });
 
@@ -439,5 +784,31 @@ describe('denied attempts are audited', () => {
       outcome: 'denied',
       details: { attempted_tenant: IDS.tenantB },
     });
+  });
+
+  it('records database RLS/privilege denials, not just AppError 403s', async () => {
+    await db.superuser.query('REVOKE UPDATE (name) ON app.sites FROM evstation_app');
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/sites/${IDS.siteA1}`,
+        headers: auth('adminA'),
+        payload: { name: 'Denied by grant' },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+
+      const audit = await db.superuser.query(
+        "SELECT tenant_id, actor_id, action, outcome FROM app.audit_log WHERE outcome = 'denied'",
+      );
+      expect(audit.rows[0]).toMatchObject({
+        tenant_id: null,
+        actor_id: IDS.adminA,
+        action: 'site.updated',
+        outcome: 'denied',
+      });
+    } finally {
+      await db.superuser.query('GRANT UPDATE (name) ON app.sites TO evstation_app');
+    }
   });
 });

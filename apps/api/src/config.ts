@@ -3,6 +3,7 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
+  HOST: z.string().min(1).default('127.0.0.1'),
   LOG_LEVEL: z.string().default('info'),
   DATABASE_URL_APP: z.string().min(1, 'DATABASE_URL_APP is required'),
   OIDC_ISSUER: z.url(),
@@ -14,6 +15,7 @@ const envSchema = z.object({
 export type ApiConfig = {
   nodeEnv: 'development' | 'test' | 'production';
   port: number;
+  host: string;
   logLevel: string;
   databaseUrlApp: string;
   oidcIssuer: string;
@@ -39,9 +41,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   const jwksUri =
     value.OIDC_JWKS_URI ?? `${value.OIDC_ISSUER.replace(/\/$/, '')}/protocol/openid-connect/certs`;
 
+  if (value.NODE_ENV === 'production') {
+    for (const [name, url] of [
+      ['OIDC_ISSUER', value.OIDC_ISSUER],
+      ['OIDC_JWKS_URI', jwksUri],
+    ] as const) {
+      if (new URL(url).protocol !== 'https:') {
+        throw new Error(`invalid API configuration: ${name} must use https in production`);
+      }
+    }
+  }
+
   return {
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
+    host: value.HOST,
     logLevel: value.LOG_LEVEL,
     databaseUrlApp: value.DATABASE_URL_APP,
     oidcIssuer: value.OIDC_ISSUER.replace(/\/$/, ''),

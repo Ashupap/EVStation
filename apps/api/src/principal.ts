@@ -111,9 +111,7 @@ export async function resolveTenant(
   }
   if (!tenantId) return undefined;
 
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)
-  ) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId)) {
     throw new AppError(400, 'INVALID_TENANT', 'tenant id must be a UUID');
   }
 
