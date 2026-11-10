@@ -4,6 +4,10 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().min(1).default('127.0.0.1'),
+  TRUST_PROXY: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   LOG_LEVEL: z.string().default('info'),
   DATABASE_URL_APP: z.string().min(1, 'DATABASE_URL_APP is required'),
   OIDC_ISSUER: z.url(),
@@ -16,6 +20,7 @@ export type ApiConfig = {
   nodeEnv: 'development' | 'test' | 'production';
   port: number;
   host: string;
+  trustProxy: boolean;
   logLevel: string;
   databaseUrlApp: string;
   oidcIssuer: string;
@@ -56,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
     host: value.HOST,
+    trustProxy: value.TRUST_PROXY,
     logLevel: value.LOG_LEVEL,
     databaseUrlApp: value.DATABASE_URL_APP,
     oidcIssuer: value.OIDC_ISSUER.replace(/\/$/, ''),

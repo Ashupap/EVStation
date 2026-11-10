@@ -38,7 +38,7 @@ export interface BuildAppOptions {
   config: ApiConfig;
   verifier: TokenVerifier;
   mailer?: Mailer;
-  rateLimit?: { max: number; timeWindow: number };
+  rateLimit?: { max?: number; ipMax?: number; timeWindow?: number };
   logger?: boolean;
   onRoute?: (route: RegisteredRoute) => void;
 }
@@ -83,6 +83,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             },
           },
     logController: new LogController({ disableRequestLogging: true }),
+    trustProxy: config.trustProxy,
     bodyLimit: BODY_LIMIT_BYTES,
     connectionTimeout: 10_000,
     requestTimeout: 15_000,
@@ -114,15 +115,31 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     app.get('/openapi.json', async () => app.swagger());
   }
 
-  app.addHook('onRequest', async (request) => {
+  const actorMax = options.rateLimit?.max ?? 100;
+  const ipMax = options.rateLimit?.ipMax ?? 300;
+  const rateLimitWindow = options.rateLimit?.timeWindow ?? 60_000;
+
+  await app.register(rateLimit, {
+    global: true,
+    max: ipMax,
+    timeWindow: rateLimitWindow,
+    nameSpace: 'evstation-ip-',
+    errorResponseBuilder: () => new AppError(429, 'RATE_LIMITED', 'too many requests'),
+  });
+
+  app.addHook('preParsing', async (request) => {
     const pathname = request.url.split('?', 1)[0] ?? '';
     if (isPublicPath(pathname)) return;
     request.claims = await authenticate(verifier, request.headers.authorization);
   });
 
   await app.register(rateLimit, {
-    max: options.rateLimit?.max ?? 100,
-    timeWindow: options.rateLimit?.timeWindow ?? 60_000,
+    global: true,
+    hook: 'preValidation',
+    max: actorMax,
+    timeWindow: rateLimitWindow,
+    nameSpace: 'evstation-actor-',
+    keyGenerator: (request) => request.claims?.sub ?? request.ip,
     errorResponseBuilder: () => new AppError(429, 'RATE_LIMITED', 'too many requests'),
   });
 
@@ -141,9 +158,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (!claims) throw new AppError(401, 'UNAUTHORIZED', 'missing bearer token');
     const requestedTenantId = tenantForRequest(definition, request);
     let principal: Principal | undefined;
+    const afterCommitTasks: Array<() => Promise<void>> = [];
 
     try {
-      return await db.transaction(async (client) => {
+      const result = await db.transaction(async (client) => {
         await setActorContext(client, claims.sub);
         principal = await loadPrincipal(client, claims);
         const tenantId = await resolveTenant(
@@ -162,12 +180,22 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           request,
           reply,
           client,
+          db,
           principal,
           tenantId,
           config,
           mailer,
+          afterCommit: (task) => afterCommitTasks.push(task),
         });
       });
+      for (const task of afterCommitTasks) {
+        try {
+          await task();
+        } catch {
+          request.log.error({ route: definition.url }, 'after-commit task failed');
+        }
+      }
+      return result;
     } catch (error) {
       if (principal && toErrorBody(error).status === 403) {
         await writeDeniedAudit(db, principal, {

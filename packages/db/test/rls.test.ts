@@ -182,6 +182,7 @@ describe('role attributes and object ownership', () => {
     );
     expect(rows.map((row) => row.relname)).toEqual([
       'audit_log',
+      'email_outbox',
       'invitations',
       'membership_sites',
       'memberships',
@@ -214,6 +215,7 @@ describe('fail-closed context', () => {
         'platform_admins',
         'invitations',
         'audit_log',
+        'email_outbox',
       ]) {
         expect(await count(client, table)).toBe(0);
       }
@@ -1137,6 +1139,10 @@ describe('least-privilege grants and defaults', () => {
       ['invitations', 'revoked_at', true],
       ['invitations', 'role', false],
       ['invitations', 'token_hash', false],
+      ['email_outbox', 'dispatched_at', true],
+      ['email_outbox', 'last_error', true],
+      ['email_outbox', 'accept_url', false],
+      ['email_outbox', 'recipient', false],
     ];
     for (const [table, column, expected] of checks) {
       const { rows } = await db.superuser.query<{ ok: boolean }>(

@@ -13,6 +13,7 @@ const IDS = {
   adminB: '00000000-0000-4000-8000-000000000003',
   siteManagerA: '00000000-0000-4000-8000-000000000004',
   viewerA: '00000000-0000-4000-8000-000000000005',
+  outsider: '00000000-0000-4000-8000-000000000099',
   invitee: '00000000-0000-4000-8000-0000000000e1',
   tenantA: '10000000-0000-4000-8000-000000000001',
   tenantB: '10000000-0000-4000-8000-000000000002',
@@ -34,6 +35,7 @@ const CLAIMS: Record<string, TokenClaims> = {
     email_verified: true,
   },
   viewerA: { sub: IDS.viewerA, email: 'viewer@acme.example', email_verified: true },
+  outsider: { sub: IDS.outsider, email: 'outsider@example.com', email_verified: true },
   invitee: { sub: IDS.invitee, email: 'invitee@example.com', email_verified: true },
   inviteeUnverified: {
     sub: IDS.invitee,
@@ -54,6 +56,7 @@ const config: ApiConfig = {
   nodeEnv: 'test',
   port: 0,
   host: '127.0.0.1',
+  trustProxy: false,
   logLevel: 'silent',
   databaseUrlApp: '',
   oidcIssuer: 'http://keycloak.test/realms/evstation',
@@ -141,6 +144,22 @@ describe('skeleton and runtime role', () => {
     expect(apiDb.pool.options.idle_in_transaction_session_timeout).toBe(15_000);
   });
 
+  it('logs pool errors without leaking the connection string', async () => {
+    const events: Array<{ name: string; code?: string; message: string }> = [];
+    const local = createDb(db.appUrl, 1, (event) => events.push(event));
+    try {
+      local.pool.emit(
+        'error',
+        new Error('connect failed for postgres://user:secret@db.example/evstation'),
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]?.message).not.toContain('postgres://');
+      expect(events[0]?.message).not.toContain('secret');
+    } finally {
+      await local.close();
+    }
+  });
+
   it('connects as the RLS runtime role, never superuser/BYPASSRLS', async () => {
     const role = await inspectRuntimeRole(apiDb.pool);
     expect(role.role).toBe('evstation_app');
@@ -205,6 +224,144 @@ describe('authentication', () => {
       const response = await limited.inject({ method: 'GET', url: '/health' });
       expect(response.statusCode).toBe(429);
       expect(response.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
+    } finally {
+      await limited.close();
+    }
+  });
+
+  it('keys the actor limiter on the verified subject, not the shared IP', async () => {
+    const limited = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      rateLimit: { max: 2, ipMax: 10, timeWindow: 60_000 },
+      logger: false,
+    });
+    await limited.ready();
+    const remoteAddress = '203.0.113.10';
+    try {
+      for (const token of ['viewerA', 'adminA']) {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const response = await limited.inject({
+            method: 'GET',
+            url: '/me',
+            headers: auth(token),
+            remoteAddress,
+          });
+          expect(response.statusCode, `${token} attempt ${attempt + 1}`).toBe(200);
+        }
+      }
+      expect(
+        (
+          await limited.inject({
+            method: 'GET',
+            url: '/me',
+            headers: auth('viewerA'),
+            remoteAddress,
+          })
+        ).statusCode,
+      ).toBe(429);
+      expect(
+        (
+          await limited.inject({
+            method: 'GET',
+            url: '/me',
+            headers: auth('adminA'),
+            remoteAddress,
+          })
+        ).statusCode,
+      ).toBe(429);
+    } finally {
+      await limited.close();
+    }
+  });
+
+  it('uses forwarded client IPs only when TRUST_PROXY is enabled', async () => {
+    const limited = await buildApp({
+      db: apiDb,
+      config: { ...config, trustProxy: true },
+      verifier,
+      mailer,
+      rateLimit: { max: 100, ipMax: 1, timeWindow: 60_000 },
+      logger: false,
+    });
+    await limited.ready();
+    try {
+      const forwarded = (ip: string) => ({ 'x-forwarded-for': ip });
+      expect(
+        (
+          await limited.inject({
+            method: 'GET',
+            url: '/health',
+            headers: forwarded('198.51.100.1'),
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await limited.inject({
+            method: 'GET',
+            url: '/health',
+            headers: forwarded('198.51.100.1'),
+          })
+        ).statusCode,
+      ).toBe(429);
+      expect(
+        (
+          await limited.inject({
+            method: 'GET',
+            url: '/health',
+            headers: forwarded('198.51.100.2'),
+          })
+        ).statusCode,
+      ).toBe(200);
+    } finally {
+      await limited.close();
+    }
+  });
+
+  it('limits an unauthenticated IP flood before token verification', async () => {
+    let verifications = 0;
+    const countingVerifier: TokenVerifier = {
+      async verify() {
+        verifications += 1;
+        throw new Error('bad token');
+      },
+    };
+    const limited = await buildApp({
+      db: apiDb,
+      config,
+      verifier: countingVerifier,
+      mailer,
+      rateLimit: { max: 100, ipMax: 2, timeWindow: 60_000 },
+      logger: false,
+    });
+    await limited.ready();
+    const remoteAddress = '203.0.113.20';
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(
+          (
+            await limited.inject({
+              method: 'GET',
+              url: '/me',
+              headers: auth('bad'),
+              remoteAddress,
+            })
+          ).statusCode,
+        ).toBe(401);
+      }
+      expect(verifications).toBe(2);
+      const flood = await limited.inject({
+        method: 'GET',
+        url: '/me',
+        headers: auth('bad'),
+        remoteAddress,
+      });
+      expect(flood.statusCode).toBe(429);
+      expect(flood.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
+      expect(verifications).toBe(2);
     } finally {
       await limited.close();
     }
@@ -415,6 +572,107 @@ describe('tenant and permission matrix', () => {
   });
 });
 
+const MATRIX_ACTORS = {
+  platform_admin: 'platform',
+  tenant_admin: 'adminA',
+  site_manager: 'managerA',
+  viewer: 'viewerA',
+  no_membership: 'outsider',
+} as const;
+
+const MATRIX_ALLOW: Record<string, Array<keyof typeof MATRIX_ACTORS>> = {
+  'GET /me': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer', 'no_membership'],
+  'PATCH /me': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer', 'no_membership'],
+  'GET /tenants': ['platform_admin'],
+  'POST /tenants': ['platform_admin'],
+  'PATCH /tenants/:id': ['platform_admin'],
+  'GET /sites': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'POST /sites': ['platform_admin', 'tenant_admin'],
+  'PATCH /sites/:id': ['platform_admin', 'tenant_admin', 'site_manager'],
+  'GET /users': ['platform_admin', 'tenant_admin'],
+  'PATCH /users/:id/role': ['platform_admin', 'tenant_admin'],
+  'GET /tenants/:tenantId/invitations': ['platform_admin', 'tenant_admin'],
+  'POST /tenants/:tenantId/invitations': ['platform_admin', 'tenant_admin'],
+  'DELETE /tenants/:tenantId/invitations/:invitationId': ['platform_admin', 'tenant_admin'],
+  'POST /invitations/accept': [
+    'platform_admin',
+    'tenant_admin',
+    'site_manager',
+    'viewer',
+    'no_membership',
+  ],
+};
+
+function matrixUrl(key: string): string {
+  if (key.includes('/tenants/:id')) return `/tenants/${IDS.tenantA}`;
+  if (key.includes('/invitations/:invitationId')) {
+    return `/tenants/${IDS.tenantA}/invitations/00000000-0000-4000-8000-0000000000ff`;
+  }
+  return key
+    .replace(':tenantId', IDS.tenantA)
+    .replace(':id', IDS.siteA1)
+    .replace(':invitationId', '00000000-0000-4000-8000-0000000000ff')
+    .replace(/^[A-Z]+ /u, '');
+}
+
+function matrixBody(
+  key: string,
+  actor: keyof typeof MATRIX_ACTORS,
+): Record<string, unknown> | undefined {
+  const slug = `matrix-${actor.replaceAll('_', '-')}`;
+  switch (key) {
+    case 'POST /tenants':
+      return { name: `Matrix ${actor}`, slug };
+    case 'PATCH /tenants/:id':
+      return { status: 'active' };
+    case 'PATCH /me':
+      return { display_name: `Matrix ${actor}` };
+    case 'POST /sites':
+      return { name: `Matrix ${actor}` };
+    case 'PATCH /sites/:id':
+      return { name: `Matrix ${actor}` };
+    case 'PATCH /users/:id/role':
+      return { role: 'viewer' };
+    case 'POST /tenants/:tenantId/invitations':
+      return { email: `${slug}@example.com`, role: 'viewer' };
+    case 'POST /invitations/accept':
+      return { token: 'a'.repeat(43) };
+    default:
+      return undefined;
+  }
+}
+
+describe('HTTP role x route matrix', () => {
+  it('matches an independent allow table for every actor and route', async () => {
+    expect(Object.keys(MATRIX_ALLOW).sort()).toEqual(
+      ROUTES.map((route) => `${route.method} ${route.url}`).sort(),
+    );
+
+    for (const route of ROUTES) {
+      const key = `${route.method} ${route.url}`;
+      const allowed = MATRIX_ALLOW[key];
+      if (!allowed) throw new Error(`missing matrix row for ${key}`);
+      for (const [actor, token] of Object.entries(MATRIX_ACTORS) as Array<
+        [keyof typeof MATRIX_ACTORS, string]
+      >) {
+        const body = matrixBody(key, actor);
+        const response = await app.inject({
+          method: route.method,
+          url: matrixUrl(key),
+          headers: { ...auth(token), 'x-tenant-id': IDS.tenantA },
+          ...(body === undefined ? {} : { payload: body }),
+        });
+        const label = `${key} as ${actor}`;
+        if (allowed.includes(actor)) {
+          expect(response.statusCode, label).not.toBe(403);
+        } else {
+          expect(response.statusCode, label).toBe(403);
+        }
+      }
+    }
+  });
+});
+
 function requestedUrl(route: (typeof ROUTES)[number], tenantId = IDS.tenantA): string {
   let url = route.url;
   if (typeof route.tenantSource === 'object') {
@@ -620,6 +878,19 @@ describe('invitations', () => {
       to: 'invitee@example.com',
     });
     expect(mailer.outbox[0]?.acceptUrl).toBe(body.accept_url);
+    const outbox = await db.superuser.query<{
+      recipient: string;
+      dispatched_at: Date | null;
+      accept_url: string;
+    }>(
+      'SELECT recipient, dispatched_at, accept_url FROM app.email_outbox WHERE invitation_id = $1',
+      [body.id],
+    );
+    expect(outbox.rows[0]).toMatchObject({
+      recipient: 'invitee@example.com',
+      accept_url: body.accept_url,
+    });
+    expect(outbox.rows[0]?.dispatched_at).not.toBeNull();
 
     const unverified = await app.inject({
       method: 'POST',
@@ -646,6 +917,25 @@ describe('invitations', () => {
       actor_id: IDS.invitee,
       action: 'invitation.accepted',
     });
+  });
+
+  it('deduplicates repeated site ids when creating an invitation', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: `/tenants/${IDS.tenantA}/invitations`,
+      headers: auth('adminA'),
+      payload: {
+        email: 'scoped@example.com',
+        role: 'site_manager',
+        site_ids: [IDS.siteA1, IDS.siteA1],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const stored = await db.superuser.query<{ site_ids: string[] }>(
+      'SELECT site_ids FROM app.invitations WHERE id = $1',
+      [created.json().id],
+    );
+    expect(stored.rows[0]?.site_ids).toEqual([IDS.siteA1]);
   });
 
   it('revokes an invitation and prevents a second acceptance', async () => {
@@ -677,6 +967,56 @@ describe('invitations', () => {
 });
 
 describe('invitation delivery', () => {
+  it('sends nothing when invitation creation rolls back', async () => {
+    const rollbackMailer = new MemoryMailer();
+    const failingDb: ApiDb = {
+      ...apiDb,
+      async transaction<T>(work: (client: import('pg').PoolClient) => Promise<T>) {
+        const client = await apiDb.pool.connect();
+        try {
+          await client.query('BEGIN');
+          await work(client);
+          throw new Error('forced rollback');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+      },
+    };
+    const failing = await buildApp({
+      db: failingDb,
+      config,
+      verifier,
+      mailer: rollbackMailer,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    await failing.ready();
+    try {
+      const response = await failing.inject({
+        method: 'POST',
+        url: `/tenants/${IDS.tenantA}/invitations`,
+        headers: auth('adminA'),
+        payload: { email: 'rollback@example.com', role: 'viewer' },
+      });
+      expect(response.statusCode).toBe(500);
+      expect(rollbackMailer.outbox).toHaveLength(0);
+      const rows = await db.superuser.query('SELECT 1 FROM app.invitations WHERE email = $1', [
+        'rollback@example.com',
+      ]);
+      expect(rows.rowCount).toBe(0);
+      const outbox = await db.superuser.query(
+        'SELECT 1 FROM app.email_outbox WHERE recipient = $1',
+        ['rollback@example.com'],
+      );
+      expect(outbox.rowCount).toBe(0);
+    } finally {
+      await failing.close();
+    }
+  });
+
   it('never returns a token in production but queues a fragment URL', async () => {
     const productionMailer = new MemoryMailer();
     const production = await buildApp({
@@ -718,7 +1058,7 @@ describe('role changes with site scope', () => {
       method: 'PATCH',
       url: `/users/${IDS.viewerA}/role`,
       headers: auth('adminA'),
-      payload: { role: 'site_manager', site_ids: [IDS.siteA1] },
+      payload: { role: 'site_manager', site_ids: [IDS.siteA1, IDS.siteA1] },
     });
     expect(promoted.statusCode).toBe(200);
     expect(promoted.json()).toMatchObject({ user_id: IDS.viewerA, role: 'site_manager' });

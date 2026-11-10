@@ -6,10 +6,12 @@ import { writeAudit } from './audit.js';
 import type { Capability } from './authorize.js';
 import { requireCapability } from './authorize.js';
 import type { ApiConfig } from './config.js';
+import type { ApiDb } from './db.js';
 import { AppError } from './errors.js';
 import type { Mailer } from './mailer.js';
 import { PaginationQuery, decodeCursor, page } from './pagination.js';
 import type { Principal, Role } from './principal.js';
+import { dispatchInvitationEmail, queueInvitationEmail } from './outbox.js';
 
 const uuid = z.string().uuid();
 const role = z.enum(['tenant_admin', 'site_manager', 'viewer']);
@@ -51,14 +53,22 @@ const SiteUpdate = z
 const RoleUpdate = z
   .object({
     role,
-    site_ids: z.array(uuid).max(100).optional(),
+    site_ids: z
+      .array(uuid)
+      .max(100)
+      .transform((ids) => [...new Set(ids)])
+      .optional(),
   })
   .strict();
 const InvitationCreate = z
   .object({
     email: z.string().trim().email().max(320),
     role,
-    site_ids: z.array(uuid).max(100).default([]),
+    site_ids: z
+      .array(uuid)
+      .max(100)
+      .default([])
+      .transform((ids) => [...new Set(ids)]),
   })
   .strict();
 const InvitationAccept = z.object({ token: z.string().min(20).max(512) }).strict();
@@ -70,10 +80,12 @@ interface RouteContext {
   request: FastifyRequest;
   reply: FastifyReply;
   client: PoolClient;
+  db: ApiDb;
   principal: Principal;
   tenantId: string | undefined;
   config: ApiConfig;
   mailer: Mailer;
+  afterCommit: (task: () => Promise<void>) => void;
 }
 
 type TenantSource = 'none' | 'header' | { param: string };
@@ -479,7 +491,17 @@ export const ROUTES: RouteDefinition[] = [
     isolation: {
       body: { email: 'probe@example.com', role: 'viewer', site_ids: [] },
     },
-    async handler({ client, principal, tenantId, request, reply, config, mailer }) {
+    async handler({
+      client,
+      db,
+      principal,
+      tenantId,
+      request,
+      reply,
+      config,
+      mailer,
+      afterCommit,
+    }) {
       const body = InvitationCreate.parse(request.body);
       const token = randomBytes(32).toString('base64url');
       const tokenHash = createHash('sha256').update(token).digest('hex');
@@ -500,12 +522,22 @@ export const ROUTES: RouteDefinition[] = [
       const invitation = rows[0];
       if (!invitation) throw new AppError(500, 'INTERNAL', 'invitation insert returned no row');
       const acceptUrl = `${config.invitationAcceptBaseUrl}#token=${encodeURIComponent(token)}`;
-      await mailer.sendInvitation({
+      const outboxId = await queueInvitationEmail(client, {
         invitationId: invitation.id,
         tenantId: invitation.tenant_id,
-        to: invitation.email,
+        recipient: invitation.email,
         acceptUrl,
         expiresAt: invitation.expires_at,
+      });
+      afterCommit(async () => {
+        await dispatchInvitationEmail({
+          db,
+          actorId: principal.id,
+          tenantId: invitation.tenant_id,
+          outboxId,
+          mailer,
+          onFailure: () => request.log.error({ outboxId }, 'invitation email dispatch failed'),
+        });
       });
       await writeAudit(client, principal, {
         tenantId: tenantId ?? null,

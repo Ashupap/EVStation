@@ -565,3 +565,22 @@ email)` owned by `evstation_definer` (atomic: membership insert +
   login loop or cross-account merge. Supporting self-service email changes in
   a later phase requires an explicit identity-link/merge workflow, not just
   enabling the Keycloak setting.
+
+### ADR-0017: Invitation mail outbox and post-commit dispatch
+
+- **Context.** Sending invitation mail inside the database transaction can
+  deliver a message for an invitation that the transaction later rolls back.
+  It also loses the message if the process exits immediately after commit.
+- **Decision.**
+  - `app.email_outbox` stores the recipient, fragment accept URL, expiry and
+    dispatch state in the same transaction as the invitation. It is covered by
+    RLS and allows only tenant managers to read/insert; the API role can update
+    only `dispatched_at` and `last_error`.
+  - The mailer runs only after the transaction commits. Successful delivery
+    marks `dispatched_at`; delivery failure leaves the row pending with a
+    generic `last_error` and logs only the outbox ID, never the accept URL.
+  - Dispatch is at-least-once. A crash after delivery but before the mark can
+    resend, which is preferable to losing an invitation in Phase 1.
+- **Consequences.** Pending rows are visible for operational follow-up, and a
+  rollback can never send mail. A later retry worker can consume the pending
+  rows without changing the invitation transaction.

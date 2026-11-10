@@ -61,11 +61,16 @@ describe('database role URLs', () => {
     expect(loadConfig(base as NodeJS.ProcessEnv)).toMatchObject({
       databaseUrlApp: base.DATABASE_URL_APP,
       host: '127.0.0.1',
+      trustProxy: false,
     });
   });
 
-  it('accepts an explicit HOST override', () => {
+  it('accepts explicit HOST and TRUST_PROXY overrides', () => {
     expect(loadConfig({ ...base, HOST: '0.0.0.0' } as NodeJS.ProcessEnv).host).toBe('0.0.0.0');
+    expect(loadConfig({ ...base, TRUST_PROXY: 'true' } as NodeJS.ProcessEnv).trustProxy).toBe(true);
+    expect(() => loadConfig({ ...base, TRUST_PROXY: 'yes' } as NodeJS.ProcessEnv)).toThrow(
+      /TRUST_PROXY/,
+    );
   });
 
   it('requires https OIDC issuer and JWKS in production', () => {
@@ -118,6 +123,7 @@ describe('JWT failures over HTTP', () => {
       nodeEnv: 'test',
       port: 0,
       host: '127.0.0.1',
+      trustProxy: false,
       logLevel: 'silent',
       databaseUrlApp: '',
       oidcIssuer: ISSUER,

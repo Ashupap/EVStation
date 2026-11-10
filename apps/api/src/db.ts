@@ -1,5 +1,27 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
 
+export interface PoolErrorEvent {
+  name: string;
+  code?: string;
+  message: string;
+}
+
+export type PoolErrorLogger = (event: PoolErrorEvent) => void;
+
+const logPoolError: PoolErrorLogger = (event) => {
+  console.error('[db] idle client error', event);
+};
+
+function sanitizePoolError(error: Error): PoolErrorEvent {
+  return {
+    name: error.name,
+    ...(typeof (error as { code?: unknown }).code === 'string'
+      ? { code: (error as unknown as { code: string }).code }
+      : {}),
+    message: error.message.replace(/postgres(?:ql)?:\/\/\S+/giu, '[REDACTED]'),
+  };
+}
+
 export interface ApiDb {
   pool: Pool;
   transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>;
@@ -10,7 +32,11 @@ export interface ApiDb {
   close(): Promise<void>;
 }
 
-export function createDb(connectionString: string, max = 10): ApiDb {
+export function createDb(
+  connectionString: string,
+  max = 10,
+  onPoolError: PoolErrorLogger = logPoolError,
+): ApiDb {
   const pool = new Pool({
     connectionString,
     max,
@@ -20,7 +46,7 @@ export function createDb(connectionString: string, max = 10): ApiDb {
     lock_timeout: 5_000,
     idle_in_transaction_session_timeout: 15_000,
   });
-  pool.on('error', () => undefined);
+  pool.on('error', (error) => onPoolError(sanitizePoolError(error)));
   return {
     pool,
     async transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
