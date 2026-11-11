@@ -49,6 +49,7 @@ const memberships = {
       site_ids: [],
     },
   ],
+  api_error: [],
   multitenant: [
     {
       tenant_id: tenantA,
@@ -117,6 +118,10 @@ const server = http.createServer(async (request, response) => {
   };
 
   if (url.pathname === '/me' && request.method === 'GET') {
+    if (persona === 'api_error') {
+      json(response, 503, { error: { code: 'INTERNAL', message: 'database unavailable' } });
+      return;
+    }
     if (persona === 'unverified') {
       json(response, 403, {
         error: { code: 'EMAIL_UNVERIFIED', message: 'email_not_verified' },

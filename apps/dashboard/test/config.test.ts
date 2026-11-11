@@ -30,6 +30,7 @@ describe('dashboard configuration', () => {
       OIDC_ISSUER: 'https://id.example.com/realms/evstation',
       OIDC_REDIRECT_URI: 'https://console.example.com/auth/callback',
       COOKIE_SECURE: 'true',
+      TRUST_PROXY: '1',
     });
     expect(config.sessionCookieName).toBe('__Host-evstation_session');
     expect(config.loginCookieName).toBe('__Host-evstation_session_login');
@@ -44,16 +45,32 @@ describe('dashboard configuration', () => {
       OIDC_REDIRECT_URI: 'https://console.example.com/auth/callback',
       COOKIE_SECURE: 'true',
       SESSION_COOKIE_NAME: '__Host-evstation_session',
+      TRUST_PROXY: '1',
     });
     expect(config.sessionCookieName).toBe('__Host-evstation_session');
   });
 
-  it('validates idle timeout and trust proxy', () => {
-    expect(loadDashboardConfig({ ...base, TRUST_PROXY: 'true' }).trustProxy).toBe(true);
+  it('validates idle timeout and trust proxy hops', () => {
+    expect(loadDashboardConfig({ ...base, TRUST_PROXY: '1' }).trustProxy).toBe(1);
+    expect(() => loadDashboardConfig({ ...base, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/u);
     expect(() => loadDashboardConfig({ ...base, TRUST_PROXY: 'maybe' })).toThrow(/TRUST_PROXY/u);
+    expect(() => loadDashboardConfig({ ...base, TRUST_PROXY: '11' })).toThrow(/TRUST_PROXY/u);
     expect(() => loadDashboardConfig({ ...base, SESSION_IDLE_TTL_SECONDS: '59' })).toThrow(
       /SESSION_IDLE_TTL_SECONDS/u,
     );
+  });
+
+  it('requires an explicit trust proxy hop count in production', () => {
+    expect(() =>
+      loadDashboardConfig({
+        ...base,
+        NODE_ENV: 'production',
+        API_BASE_URL: 'https://api.example.com',
+        OIDC_ISSUER: 'https://id.example.com/realms/evstation',
+        OIDC_REDIRECT_URI: 'https://console.example.com/auth/callback',
+        COOKIE_SECURE: 'true',
+      }),
+    ).toThrow(/TRUST_PROXY must be set/u);
   });
 
   it('rejects insecure production redirects and cookies', () => {
@@ -74,6 +91,7 @@ describe('dashboard configuration', () => {
       OIDC_ISSUER: 'https://id.example.com/realms/evstation',
       OIDC_REDIRECT_URI: 'https://console.example.com/auth/callback',
       COOKIE_SECURE: 'true',
+      TRUST_PROXY: '1',
     });
     expect(config.cookieSecure).toBe(true);
   });
@@ -87,6 +105,7 @@ describe('dashboard configuration', () => {
         OIDC_ISSUER: 'https://id.example.com/realms/evstation',
         OIDC_REDIRECT_URI: 'https://console.example.com/auth/callback',
         COOKIE_SECURE: 'true',
+        TRUST_PROXY: '1',
         DASHBOARD_E2E_MODE: 'true',
       }),
     ).toThrow(/DASHBOARD_E2E_MODE/u);

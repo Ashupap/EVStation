@@ -10,7 +10,7 @@ export interface DashboardConfig {
   sessionAbsoluteTtlSeconds: number;
   sessionIdleTtlSeconds: number;
   cookieSecure: boolean;
-  trustProxy: boolean;
+  trustProxy: false | number;
   e2eMode: boolean;
 }
 
@@ -35,6 +35,22 @@ function bool(env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean 
   if (value === 'true') return true;
   if (value === 'false') return false;
   throw new Error(`invalid dashboard configuration: ${name} must be true or false`);
+}
+
+function trustProxyHops(env: NodeJS.ProcessEnv): false | number {
+  const value = env.TRUST_PROXY?.trim();
+  if (value === undefined || value === '' || value === 'false') return false;
+  if (value === 'true') {
+    throw new Error('invalid dashboard configuration: TRUST_PROXY must be a hop count, not true');
+  }
+  if (!/^\d+$/u.test(value)) {
+    throw new Error('invalid dashboard configuration: TRUST_PROXY must be a hop count');
+  }
+  const hops = Number(value);
+  if (!Number.isSafeInteger(hops) || hops < 1 || hops > 10) {
+    throw new Error('invalid dashboard configuration: TRUST_PROXY hop count must be 1-10');
+  }
+  return hops;
 }
 
 export function dashboardUrl(config: DashboardConfig, path: string): URL {
@@ -83,7 +99,7 @@ export function loadDashboardConfig(env: NodeJS.ProcessEnv = process.env): Dashb
     sessionAbsoluteTtlSeconds: absoluteTtl,
     sessionIdleTtlSeconds: idleTtl,
     cookieSecure,
-    trustProxy: bool(env, 'TRUST_PROXY', false),
+    trustProxy: trustProxyHops(env),
     e2eMode: bool(env, 'DASHBOARD_E2E_MODE', false),
   };
 
@@ -104,6 +120,9 @@ export function loadDashboardConfig(env: NodeJS.ProcessEnv = process.env): Dashb
     }
     if (!config.cookieSecure) {
       throw new Error('invalid dashboard configuration: COOKIE_SECURE must be true in production');
+    }
+    if (config.trustProxy === false) {
+      throw new Error('invalid dashboard configuration: TRUST_PROXY must be set in production');
     }
   }
 

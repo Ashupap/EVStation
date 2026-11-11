@@ -12,7 +12,7 @@ const dashboardEnv = {
   SESSION_ABSOLUTE_TTL_SECONDS: '28800',
   SESSION_IDLE_TTL_SECONDS: '1800',
   COOKIE_SECURE: 'false',
-  TRUST_PROXY: 'true',
+  TRUST_PROXY: '1',
 };
 
 export default defineConfig({

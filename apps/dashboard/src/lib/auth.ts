@@ -117,9 +117,12 @@ export async function hasServerSession(): Promise<boolean> {
   return Boolean(sessionId && getSessionStore().get(sessionId));
 }
 
-export const getAuthContext = cache(async (): Promise<AuthContext | undefined> => {
+export type AuthState =
+  { kind: 'ok'; auth: AuthContext } | { kind: 'anonymous' } | { kind: 'unavailable' };
+
+export const getAuthState = cache(async (): Promise<AuthState> => {
   const current = await getSession();
-  if (!current) return undefined;
+  if (!current) return { kind: 'anonymous' };
   const incomingHeaders = await headers();
   const response = await apiFetch(
     current.session,
@@ -131,12 +134,18 @@ export const getAuthContext = cache(async (): Promise<AuthContext | undefined> =
 
   if (result.kind === 'unauthenticated') {
     getSessionStore().delete(current.sessionId);
-    return undefined;
+    return { kind: 'anonymous' };
   }
   if (result.kind === 'unverified') redirect('/unverified-email');
-  if (result.kind !== 'ok') return undefined;
+  if (result.kind === 'error') return { kind: 'unavailable' };
+  if (result.kind !== 'ok') return { kind: 'anonymous' };
 
-  return { ...current, principal: result.principal };
+  return { kind: 'ok', auth: { ...current, principal: result.principal } };
+});
+
+export const getAuthContext = cache(async (): Promise<AuthContext | undefined> => {
+  const state = await getAuthState();
+  return state.kind === 'ok' ? state.auth : undefined;
 });
 
 export function activeMembership(

@@ -13,6 +13,7 @@ const personas: Record<string, { tenantId: string; accessExpiresAt?: number }> =
   manager: { tenantId: TENANT_A },
   unverified: { tenantId: TENANT_A },
   multitenant: { tenantId: TENANT_A },
+  api_error: { tenantId: TENANT_A },
   expired: { tenantId: TENANT_A, accessExpiresAt: Date.now() - 1_000 },
 };
 

@@ -184,6 +184,14 @@ test('accepts an invitation using only the URL fragment token', async ({ page })
   expect(request.body).toContain(token);
 });
 
+test('shows a service-unavailable message when the API returns 5xx', async ({ page }) => {
+  await page.goto('/auth/test-login?persona=api_error');
+  await expect(page).toHaveURL(/\/login$/u);
+  await expect(page.getByTestId('service-unavailable')).toBeVisible();
+  await expect(page.getByText('EVStation API is offline')).toBeVisible();
+  await expect(page.getByTestId('login')).toHaveCount(0);
+});
+
 test('blocks an unverified email before the console', async ({ page }) => {
   await page.goto('/auth/test-login?persona=unverified');
   await expect(page).toHaveURL(/\/unverified-email$/u);

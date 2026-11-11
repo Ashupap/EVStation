@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getAuthContext } from '@/lib/auth';
+import { getAuthState } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,8 +15,8 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const auth = await getAuthContext();
-  if (auth) redirect('/app');
+  const authState = await getAuthState();
+  if (authState.kind === 'ok') redirect('/app');
   const params = await searchParams;
   const errorKey = typeof params.error === 'string' ? params.error : undefined;
   const message = errorKey ? (errors[errorKey] ?? 'Sign-in could not be completed.') : undefined;
@@ -47,32 +47,56 @@ export default async function LoginPage({
         </div>
 
         <div className="flex flex-col justify-center p-8 sm:p-12">
-          <p className="text-sm font-semibold text-cyan-700">Welcome back</p>
-          <h2 className="mt-2 text-3xl font-black tracking-tight text-slate-950">Sign in</h2>
-          <p className="mt-3 text-sm leading-6 text-slate-600">
-            You will be redirected to Keycloak. Your browser never receives an API token.
-          </p>
-          {message ? (
-            <p
-              role="alert"
-              className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700"
-            >
-              {message}
-            </p>
-          ) : null}
-          <a
-            href="/auth/login"
-            data-testid="login"
-            className="mt-8 inline-flex items-center justify-center rounded-xl bg-cyan-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-cyan-600/20 transition hover:bg-cyan-700"
-          >
-            Continue to sign in
-          </a>
-          <p className="mt-6 text-xs leading-5 text-slate-500">
-            Access is invitation-only. Contact your tenant administrator if you need an account.
-          </p>
-          <Link href="/" className="mt-6 text-xs font-semibold text-slate-500 hover:text-slate-800">
-            Back to EVStation
-          </Link>
+          {authState.kind === 'unavailable' ? (
+            <div data-testid="service-unavailable">
+              <p className="text-sm font-semibold text-amber-700">Service unavailable</p>
+              <h2 className="mt-2 text-3xl font-black tracking-tight text-slate-950">
+                EVStation API is offline
+              </h2>
+              <p role="alert" className="mt-3 text-sm leading-6 text-slate-600">
+                Sign-in cannot be completed because the EVStation API is temporarily unavailable.
+                Try again shortly.
+              </p>
+              <a
+                href="/login"
+                className="mt-8 inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+              >
+                Try again
+              </a>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm font-semibold text-cyan-700">Welcome back</p>
+              <h2 className="mt-2 text-3xl font-black tracking-tight text-slate-950">Sign in</h2>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                You will be redirected to Keycloak. Your browser never receives an API token.
+              </p>
+              {message ? (
+                <p
+                  role="alert"
+                  className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700"
+                >
+                  {message}
+                </p>
+              ) : null}
+              <a
+                href="/auth/login"
+                data-testid="login"
+                className="mt-8 inline-flex items-center justify-center rounded-xl bg-cyan-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-cyan-600/20 transition hover:bg-cyan-700"
+              >
+                Continue to sign in
+              </a>
+              <p className="mt-6 text-xs leading-5 text-slate-500">
+                Access is invitation-only. Contact your tenant administrator if you need an account.
+              </p>
+              <Link
+                href="/"
+                className="mt-6 text-xs font-semibold text-slate-500 hover:text-slate-800"
+              >
+                Back to EVStation
+              </Link>
+            </>
+          )}
         </div>
       </section>
     </main>
