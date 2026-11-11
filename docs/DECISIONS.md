@@ -594,9 +594,58 @@ email)` owned by `evstation_definer` (atomic: membership insert +
 - **Decision.** Phase 1 does not implement platform-admin acting-as or any
   user impersonation. Platform admins use their own identity; tenant-scoped
   actions still require a membership in the selected tenant. The
-  `acting_as_platform_admin` audit marker remains for future compatibility
-  but no Phase 1 route sets it.
+  `acting_as_platform_admin` audit marker is set when a platform admin uses
+  their own identity to act inside a selected tenant; it is not an
+  impersonation marker.
 - **Consequences.** Support cannot reproduce a tenant user's exact
   permissions through impersonation in Phase 1. Adding it later requires a
   new ADR, short-lived impersonation grants, clear UI indicators, and audit
   events that preserve both actor and subject identities.
+
+### ADR-0019: Dashboard client IPs use an explicit trusted-proxy hop count
+
+- **Context.** The dashboard rate-limits login and callback attempts and forwards
+  the end-user IP to the API. Taking the leftmost `X-Forwarded-For` entry lets a
+  client spoof the bucket/forwarded IP. With no trust setting, every direct
+  client shares one bucket, so an unauthenticated flood can lock out everyone.
+  Next.js route handlers do not expose the peer socket address, so the dashboard
+  cannot apply the API's proxy/CIDR source check.
+- **Decision.**
+  - `TRUST_PROXY` on the dashboard is `false` or an integer hop count (`1`–`10`),
+    matching the API's hop-count form. `true` is rejected.
+  - With a hop count, the dashboard selects the `X-Forwarded-For` entry counted
+    from the right (`addresses[length - hops]`), ignoring spoofed entries to its
+    left. Missing, short or non-IP chains fall back to the shared `direct`
+    bucket and are not forwarded to the API.
+  - Production startup fails unless `TRUST_PROXY` is set. The deployment must
+    prevent direct access to the dashboard and the trusted edge proxy must
+    overwrite inbound `X-Forwarded-For`.
+  - Development may keep `TRUST_PROXY=false`; the shared bucket is accepted
+    there.
+- **Consequences.** Spoofed leftmost XFF no longer bypasses or poisons the
+  limit, and clients behind one proxy get separate buckets. The dashboard
+  cannot verify the peer against a CIDR list until it runs behind a custom
+  server or proxy that supplies the peer address; that is deliberately out of
+  Phase 1. The rate limiter remains in-process (see known issues).
+
+## Known issues (Phase 1 close-out)
+
+1. **In-process dashboard state.** OIDC login transactions, sessions and
+   rate-limit buckets live in the dashboard process. Restarting the dashboard
+   ends all sessions, and multiple replicas do not share sessions or limits.
+   Phase 2 needs a shared session/limit store (for example Redis) or sticky
+   single-replica deployment.
+2. **Dashboard trusted proxy.** Only hop-count mode is supported because Next.js
+   does not expose the peer socket. Production requires `TRUST_PROXY` and a
+   proxy-enforced network boundary; there is no CIDR-list source check in the
+   dashboard.
+3. **Platform-admin impersonation.** "Acting as" another user is deferred
+   (ADR-0018). Platform admins act with their own identity and the audit marker
+   `acting_as_platform_admin`; tenant-scoped actions still require membership.
+4. **Invitation email.** Delivery remains a dev outbox/mailer stub until the
+   Phase 5 email integration; pending rows are inspectable and retryable.
+5. **Phase 0 deployment blockers remain.** Profile-0 OCPP and CitrineOS
+   `localDev` HTTP auth are still local-only (ADR-0008); the image EOL watch
+   items remain pinned (ADR-0009).
+6. **No hard delete/purge.** Offboarding is soft-delete; audit history is
+   retained and there is no tenant/user purge endpoint in Phase 1.

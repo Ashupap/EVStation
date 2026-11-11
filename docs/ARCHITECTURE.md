@@ -2,10 +2,11 @@
 
 Phase 0 delivers the one-command local CMS: the pinned upstream CitrineOS
 stack, our project template around it, and end-to-end proof tooling. Phase 1
-(additive) adds Keycloak-backed authentication, a DB-enforced tenant model
-and the dashboard/API shells; see "Phase 1" below. Everything runs from a
-clean clone with `pnpm dev:stack` and is verified by `pnpm health` +
-`pnpm smoke` (plus the Phase 1 test suites).
+(additive) adds Keycloak-backed authentication, a DB-enforced tenant model, the
+dashboard BFF and the API; see "Phase 1" below. Everything runs from a clean
+clone with `pnpm dev:stack` and is verified by `pnpm health` + `pnpm smoke`,
+the PR CI suites, and the nightly real Keycloak/API E2E run. The binding
+acceptance matrix is [PHASE1_ACCEPTANCE.md](./PHASE1_ACCEPTANCE.md).
 
 ```text
                         ┌──────── EVStation (this repo) ─────────┐
@@ -20,9 +21,9 @@ clean clone with `pnpm dev:stack` and is verified by `pnpm health` +
                         └───┬────────────────────────────────────┘
                             │ tracks
                      ┌──────▼───────┐     ┌──── our PostGIS db ───┐
-                     │ ocpp-db (pg16│     │ evstation (placeholder│
-                     │ postgis3.5,  │     │ until Phase 1 tables  │
-                     │ tenant 1)    │     │ land)                 │
+                     │ ocpp-db (pg16│     │ evstation (Phase 1)   │
+                     │ postgis3.5,  │     │ tenants/users/RLS     │
+                     │ tenant 1)    │     │ app role + GUC        │
                      └──────────────┘     └───────────────────────┘
         (sidecars: amqp-broker 5672 · keycloak 8180 · citrine-ui 13000 profile)
 ```
@@ -112,9 +113,21 @@ browser ──▶ dashboard :3200 (Next.js BFF)          API :4000 (Fastify)
   transaction, then dispatches after the response has been sent. Definitive
   claim/complete/fail functions keep `accept_url` unreadable to the app role;
   a separate worker retries failures and prunes retained rows.
-- **Client IPs.** `TRUST_PROXY` is an explicit hop count or proxy/CIDR list,
-  never `true`. This prevents spoofed `X-Forwarded-For` from resetting the
-  unauthenticated IP bucket.
+- **Client IPs.** The API accepts `TRUST_PROXY` as an explicit hop count or
+  proxy/CIDR list, never `true`; it uses the first untrusted hop from the
+  socket. The dashboard accepts only a hop count (`1`–`10`) because the Next.js
+  runtime does not expose the peer socket address; it takes the
+  `X-Forwarded-For` entry counted from the right and ignores spoofed leftmost
+  entries. Production startup fails without a hop count. The dashboard must be
+  reachable only through the trusted proxy, and its rate limiter keys on the
+  resolved IP (shared `direct` bucket in dev when disabled).
+- **API availability.** The login page distinguishes an API `5xx`/unreachable
+  failure from an anonymous or unauthenticated visitor and renders a
+  service-unavailable state instead of the sign-in form.
+- **In-process state.** Dashboard OIDC login transactions, sessions and
+  rate-limit buckets are in-process for Phase 1 (single replica, restart clears
+  sessions). A shared store is required before horizontal scaling; see
+  DECISIONS → known issues.
 
 ### Audit semantics (for API authors)
 
@@ -159,11 +172,18 @@ Very short pointers — full reasoning in `docs/DECISIONS.md`:
 | ADR-0012 | API JWT auth, single-tx context, `authorize()`, error shape  |
 | ADR-0013 | Dashboard confidential client + server-side session + CSRF   |
 | ADR-0014 | Invitations (hashed tokens) and append-only audit log        |
+| ADR-0015 | Trusted definer context for invitation acceptance            |
+| ADR-0016 | Keycloak email changes and local email collisions            |
+| ADR-0017 | Invitation mail outbox and post-commit dispatch              |
+| ADR-0018 | Platform-admin impersonation is out of Phase 1 scope         |
+| ADR-0019 | Dashboard trusted-proxy hop count + in-process limits        |
 
 ## Phase 1 / 2 entry points
 
-- Dashboard (3200) + API (4000) wire up in Phase 1; realm client is
-  confidential (PKCE, secret from env via the dev seeder).
+- Dashboard (3200) + API (4000) are wired in Phase 1; the realm client is
+  confidential (PKCE, secret from env via the dev seeder). Production requires
+  `TRUST_PROXY=<hops>` for the dashboard and a trusted reverse proxy that
+  overwrites inbound `X-Forwarded-For`.
 - Adapter (`packages/csms-adapter`) talks to CitrineOS via Swagger (add a
   Bearer token factory — ADR-0008) and OCPP routing DB events.
 - Tenancy: Phase 1 introduces real tenants in our DB; mapping CitrineOS's

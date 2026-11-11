@@ -16,7 +16,12 @@ An EV charging Central Management System (CMS) for India, built on top of
 **Phase 0 (repository & infrastructure bootstrap) — complete.** Tagged
 `phase-0-complete`.
 
-Proven in this phase:
+**Phase 1 (authentication, tenants and row-level security) — implementation
+complete; PR #2 is awaiting final reviewer sign-off.** The acceptance matrix is
+in [docs/PHASE1_ACCEPTANCE.md](docs/PHASE1_ACCEPTANCE.md); deferred items and
+operational limits are listed under [Known issues](#known-issues).
+
+Proven in Phase 0:
 
 - One-command local stack (`pnpm dev:stack`) — 7 services, all healthy; CitrineOS
   pinned to v2.1.0 (`4fd7599b…`, verified, vendored sparse checkout).
@@ -31,8 +36,34 @@ Proven in this phase:
 - CI — `ci.yml` runs lint/format/typecheck/tests on PRs and main; `smoke.yml`
   runs the full stack + smoke twice on manual dispatch and nightly.
 
-Phase 1 (first vertical slice: dashboard + API + adapter) is next; see
-`docs/ARCHITECTURE.md` for entry points and `docs/DECISIONS.md` for open questions.
+Proven in Phase 1:
+
+- Keycloak Authorization Code + PKCE with a confidential dashboard client; the
+  browser receives only an opaque `HttpOnly` session cookie and never sees API
+  or OIDC tokens.
+- Fastify API JWT verification (signature, issuer, audience, expiry), tenant
+  context from verified claims/header, centralized authorization and the PRD §7
+  role matrix.
+- PostgreSQL RLS with a non-owner, non-BYPASSRLS app role, forced policies,
+  transaction-scoped actor/tenant context, and an isolation suite that walks the
+  route registry.
+- Invitations (hashed tokens, fragment-only accept URL), append-only audit log,
+  outbox email stub, CSRF-protected BFF mutations, fixed-window login/callback
+  throttling, idle/absolute server-side session expiry and RP-initiated logout.
+- Required PR CI plus a nightly/dispatch real Keycloak + API + dashboard E2E
+  smoke run, including a production-like OCPP overlay that refuses an
+  unregistered station while the commissioned fixture still boots.
+
+Known issues:
+
+- Dashboard sessions, login transactions and rate-limit buckets are in-process.
+  A restart ends sessions and a multi-replica deployment needs a shared store.
+- `TRUST_PROXY` on the dashboard is a hop count and is mandatory in production;
+  the dashboard must not be directly reachable except through the trusted proxy.
+- Platform-admin impersonation / "acting as" is explicitly deferred (ADR-0018).
+- Invitation email delivery remains a logged/dev outbox stub until Phase 5.
+- The OCPP profile-0 exposure and CitrineOS `localDev` HTTP auth remain
+  non-local-deployment blockers from Phase 0 (ADR-0008, RUNBOOK).
 
 ## Quickstart
 
@@ -71,8 +102,8 @@ Notes:
 ## Repository layout (as built)
 
 ```
-apps/api               Fastify API service (placeholder, port 4000 reserved)
-apps/dashboard         Next.js operator dashboard (placeholder, port 3200 reserved)
+apps/api               Fastify BFF-facing API (Phase 1, port 4000)
+apps/dashboard         Next.js BFF operator dashboard (Phase 1, port 3200)
 packages/db            Schema, migrations, RLS policies, seeds (Phase 1)
 packages/csms-adapter  Only module allowed to talk to CitrineOS (Phase 1)
 packages/shared        Shared types, Zod schemas, constants
@@ -86,22 +117,26 @@ docs                   PRD, ARCHITECTURE, DECISIONS (ADRs), RUNBOOK, evidence
 
 ## Commands
 
-| Command                           | What it does                                 |
-| --------------------------------- | -------------------------------------------- |
-| `pnpm dev:stack`                  | Verify pin, generate `.env`, start the stack |
-| `pnpm dev:stack:down [--volumes]` | Stop the stack (optionally wipe volumes)     |
-| `pnpm dev:stack:logs`             | Follow service logs                          |
-| `pnpm health` / `health:json`     | Probe all services (human / machine output)  |
-| `pnpm smoke`                      | Idempotent end-to-end smoke test             |
-| `pnpm lint` / `lint:fix`          | ESLint                                       |
-| `pnpm format` / `format:check`    | Prettier                                     |
-| `pnpm typecheck`                  | Per-package + root TypeScript                |
-| `pnpm test` / `test:watch`        | Vitest                                       |
+| Command                                            | What it does                                 |
+| -------------------------------------------------- | -------------------------------------------- |
+| `pnpm dev:stack`                                   | Verify pin, generate `.env`, start the stack |
+| `pnpm dev:stack:down [--volumes]`                  | Stop the stack (optionally wipe volumes)     |
+| `pnpm dev:stack:logs`                              | Follow service logs                          |
+| `pnpm health` / `health:json`                      | Probe all services (human / machine output)  |
+| `pnpm smoke`                                       | Idempotent end-to-end smoke test             |
+| `pnpm lint` / `lint:fix`                           | ESLint                                       |
+| `pnpm format` / `format:check`                     | Prettier                                     |
+| `pnpm typecheck`                                   | Per-package + root TypeScript                |
+| `pnpm test` / `test:watch`                         | Vitest unit/integration suites               |
+| `pnpm test:db`                                     | SQL-level RLS/migration suite                |
+| `pnpm --filter @evstation/dashboard test:e2e`      | Mocked browser E2E                           |
+| `pnpm --filter @evstation/dashboard test:e2e:real` | Real Keycloak + API E2E                      |
 
 ## Documentation
 
 - [Product requirements](docs/PRD.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Phase 1 acceptance matrix](docs/PHASE1_ACCEPTANCE.md)
 - [Decisions (ADRs) & known issues](docs/DECISIONS.md)
 - [Runbook](docs/RUNBOOK.md) — ports, health, first station bring-up, smoke, troubleshooting
 - [Simulator](tools/simulator/README.md)

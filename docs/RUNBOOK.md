@@ -32,8 +32,8 @@ Windows/macOS should work through Docker Desktop but are unverified.
   8090  Hasura GraphQL engine
   5672  RabbitMQ AMQP                15672  RabbitMQ management UI
  13000  CitrineOS Operator UI        (profile `ui`, off by default; container 3000)
-  3200  EVStation dashboard (Phase 1)         reserved — not in the stack yet
-  4000  EVStation API service (Phase 1)       reserved — not in the stack yet
+  3200  EVStation dashboard (Phase 1)         local dev server / Playwright
+  4000  EVStation API service (Phase 1)       local dev server / Playwright
 ```
 
 ⚠ **Reserved ports (permanently, on every dev host using this template) —
@@ -122,6 +122,34 @@ the connected role is superuser/BYPASSRLS. Tenant-scoped requests use the
 verified JWT plus `X-Tenant-Id` (or an `:tenantId` route param); the header is
 validated against memberships/platform-admin status. OpenAPI is served at
 `/openapi.json` and `/docs`; tests are in `apps/api/test` (`pnpm test`).
+
+## Dashboard service and E2E (Phase 1)
+
+`pnpm dev:stack` creates `apps/dashboard/.env.local` with the generated Keycloak
+client secret; fill any missing values from `apps/dashboard/.env.example`.
+Database setup and the real-stack tests use the same local stack:
+
+```shell
+pnpm db:migrate && pnpm db:seed
+pnpm --filter @evstation/dashboard dev                 # http://localhost:3200
+pnpm --filter @evstation/dashboard test:e2e           # mocked API; 15+ browser tests
+pnpm --filter @evstation/dashboard test:e2e:real      # real Keycloak + API; 3 tests
+```
+
+The mocked E2E suite is required in PR CI. The real-stack suite and the
+production-like OCPP station-policy test are part of the nightly/dispatch
+`smoke` workflow (after fresh + rerun `pnpm smoke`):
+
+```shell
+pnpm test:ocpp:production-like   # unregistered station refused; cp001 boots Accepted
+```
+
+```shell
+gh workflow run smoke.yml --ref <branch>
+```
+
+When the API is down, `/login` renders a service-unavailable state rather than
+the sign-in form. Production requires `TRUST_PROXY=<hops>` for the dashboard.
 
 ## Start / stop
 
@@ -215,8 +243,17 @@ worker's JSON error log for `invitation email dispatch failed`; rows remain
 retryable until the attempt limit, after which the token is scrubbed.
 
 `TRUST_PROXY` is `false`, a hop count (`1`–`10`), or a comma-separated
-proxy/CIDR list (`127.0.0.1,10.0.0.0/8`). `true` is rejected: the proxy must be
-identified explicitly so spoofed `X-Forwarded-For` cannot evade the IP limit.
+proxy/CIDR list (`127.0.0.1,10.0.0.0/8`) for the API. `true` is rejected: the
+proxy must be identified explicitly so spoofed `X-Forwarded-For` cannot evade
+the IP limit.
+
+The dashboard accepts only a hop count (`1`–`10`) or `false`, takes the
+`X-Forwarded-For` entry counted from the right, and ignores all entries to its
+left. `false` is allowed in development (one shared `direct` rate-limit bucket)
+but **production startup fails unless `TRUST_PROXY` is set**. The dashboard must
+not be reachable except through the trusted proxy; the proxy must overwrite
+inbound `X-Forwarded-For`. The API's CIDR-list mode is not available in the
+dashboard because Next.js does not expose the peer socket address.
 
 ## OCPP WebSocket exposure (Phase 0 → real chargers)
 
