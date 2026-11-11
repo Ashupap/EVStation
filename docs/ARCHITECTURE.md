@@ -63,9 +63,10 @@ clean clone with `pnpm dev:stack` and is verified by `pnpm health` +
 - Hasura admin-secret enforced (compose note 7); secret values live in
   git-ignored `infra/compose/.env`, generated randomly on first creation;
   never printed by scripts.
-- Keycloak realm `evstation`: dashboard public client (PKCE, no secret),
-  self-registration and password reset disabled, brute-force lockout on.
-  Realm import is idempotent via Keycloak `--import-realm`.
+- Keycloak realm `evstation`: dashboard confidential client (Authorization
+  Code + PKCE; secret applied by the dev seeder), self-registration and
+  password reset disabled, brute-force lockout on. Realm import is idempotent
+  via Keycloak `--import-realm`.
 - CitrineOS HTTP auth mode is upstream default `localDev` — dev-only per
   ADR-0008 (jwt/Keycloak planned for Phase 2).
 - Real-charger hardening (security-profile migration, TLS material,
@@ -106,6 +107,14 @@ browser ──▶ dashboard :3200 (Next.js BFF)          API :4000 (Fastify)
 - **Isolation proof.** SQL-level tests connect as `evstation_app` (no
   BYPASSRLS, not the table owner, FORCE RLS) and prove zero cross-tenant
   rows; the API isolation suite iterates the route registry.
+
+- **Invitation delivery.** The API writes an outbox row in the invitation
+  transaction, then dispatches after the response has been sent. Definitive
+  claim/complete/fail functions keep `accept_url` unreadable to the app role;
+  a separate worker retries failures and prunes retained rows.
+- **Client IPs.** `TRUST_PROXY` is an explicit hop count or proxy/CIDR list,
+  never `true`. This prevents spoofed `X-Forwarded-For` from resetting the
+  unauthenticated IP bucket.
 
 ### Audit semantics (for API authors)
 

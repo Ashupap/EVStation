@@ -24,6 +24,7 @@ function sanitizePoolError(error: Error): PoolErrorEvent {
 
 export interface ApiDb {
   pool: Pool;
+  setPoolErrorLogger?(logger: PoolErrorLogger): void;
   transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T>;
   query<R extends QueryResultRow = QueryResultRow>(
     text: string,
@@ -46,9 +47,13 @@ export function createDb(
     lock_timeout: 5_000,
     idle_in_transaction_session_timeout: 15_000,
   });
-  pool.on('error', (error) => onPoolError(sanitizePoolError(error)));
+  let poolErrorLogger = onPoolError;
+  pool.on('error', (error) => poolErrorLogger(sanitizePoolError(error)));
   return {
     pool,
+    setPoolErrorLogger(logger: PoolErrorLogger) {
+      poolErrorLogger = logger;
+    },
     async transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
       const client = await pool.connect();
       let failure: Error | undefined;

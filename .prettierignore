@@ -4,6 +4,7 @@ dist/
 coverage/
 third_party/
 .next/
+apps/dashboard/next-env.d.ts
 pnpm-lock.yaml
 
 # Product spec is the property of the author; do not churn it with formatting

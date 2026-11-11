@@ -40,6 +40,7 @@ export interface BuildAppOptions {
   mailer?: Mailer;
   rateLimit?: { max?: number; ipMax?: number; timeWindow?: number };
   logger?: boolean;
+  logStream?: NodeJS.WritableStream;
   onRoute?: (route: RegisteredRoute) => void;
 }
 
@@ -63,12 +64,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     throw new Error('a mailer is required in production');
   }
   const docsEnabled = config.nodeEnv === 'development';
+  const trustProxy =
+    typeof config.trustProxy === 'number'
+      ? (_address: string, hop: number) => hop < (config.trustProxy as number)
+      : config.trustProxy;
   const app = Fastify({
     logger:
       options.logger === false
         ? false
         : {
             level: config.logLevel,
+            ...(options.logStream ? { stream: options.logStream } : {}),
             redact: {
               paths: [
                 'req.headers.authorization',
@@ -83,10 +89,36 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             },
           },
     logController: new LogController({ disableRequestLogging: true }),
-    trustProxy: config.trustProxy,
+    trustProxy,
     bodyLimit: BODY_LIMIT_BYTES,
     connectionTimeout: 10_000,
     requestTimeout: 15_000,
+  });
+
+  db.setPoolErrorLogger?.((event) => {
+    app.log.error(event, 'database pool error');
+  });
+
+  const afterResponseTasks = new WeakMap<FastifyRequest, Array<() => Promise<void>>>();
+  app.addHook('onResponse', (request, reply, done) => {
+    const tasks = afterResponseTasks.get(request);
+    afterResponseTasks.delete(request);
+    if (!tasks || tasks.length === 0) {
+      done();
+      return;
+    }
+    setImmediate(() => {
+      void (async () => {
+        for (const task of tasks) {
+          try {
+            await task();
+          } catch {
+            request.log.error({ task: 'after-response' }, 'after-response task failed');
+          }
+        }
+      })();
+    });
+    done();
   });
 
   app.setValidatorCompiler(validatorCompiler);
@@ -116,7 +148,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   }
 
   const actorMax = options.rateLimit?.max ?? 100;
-  const ipMax = options.rateLimit?.ipMax ?? 300;
+  const ipMax = options.rateLimit?.ipMax ?? 3_000;
   const rateLimitWindow = options.rateLimit?.timeWindow ?? 60_000;
 
   await app.register(rateLimit, {
@@ -188,13 +220,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           afterCommit: (task) => afterCommitTasks.push(task),
         });
       });
-      for (const task of afterCommitTasks) {
-        try {
-          await task();
-        } catch {
-          request.log.error({ route: definition.url }, 'after-commit task failed');
-        }
-      }
+      if (afterCommitTasks.length > 0) afterResponseTasks.set(request, afterCommitTasks);
       return result;
     } catch (error) {
       if (principal && toErrorBody(error).status === 403) {

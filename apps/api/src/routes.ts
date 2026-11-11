@@ -532,8 +532,6 @@ export const ROUTES: RouteDefinition[] = [
       afterCommit(async () => {
         await dispatchInvitationEmail({
           db,
-          actorId: principal.id,
-          tenantId: invitation.tenant_id,
           outboxId,
           mailer,
           onFailure: () => request.log.error({ outboxId }, 'invitation email dispatch failed'),

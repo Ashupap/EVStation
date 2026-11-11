@@ -1,5 +1,4 @@
 import type { PoolClient } from 'pg';
-import { setActorContext, setTenantContext } from './context.js';
 import type { ApiDb } from './db.js';
 import type { Mailer } from './mailer.js';
 
@@ -9,6 +8,21 @@ export interface QueuedInvitation {
   recipient: string;
   acceptUrl: string;
   expiresAt: Date;
+}
+
+export interface OutboxJob {
+  id: string;
+  tenant_id: string;
+  invitation_id: string;
+  recipient: string;
+  accept_url: string;
+  expires_at: Date;
+  attempts: number;
+}
+
+export interface OutboxLogger {
+  error(fields: Record<string, unknown>, message: string): void;
+  info?(fields: Record<string, unknown>, message: string): void;
 }
 
 export async function queueInvitationEmail(
@@ -33,68 +47,145 @@ export async function queueInvitationEmail(
   return row.id;
 }
 
-interface OutboxRow {
-  invitation_id: string;
-  tenant_id: string;
-  recipient: string;
-  accept_url: string;
-  expires_at: Date;
+async function claimForId(db: ApiDb, outboxId: string): Promise<OutboxJob | undefined> {
+  const { rows } = await db.query<OutboxJob>(
+    `SELECT id, tenant_id, invitation_id, recipient, accept_url, expires_at, attempts
+     FROM app.claim_email_outbox_for_id($1)`,
+    [outboxId],
+  );
+  return rows[0];
+}
+
+async function deliver(
+  db: ApiDb,
+  job: OutboxJob,
+  mailer: Mailer,
+  maxAttempts: number,
+): Promise<boolean> {
+  try {
+    await mailer.sendInvitation({
+      invitationId: job.invitation_id,
+      tenantId: job.tenant_id,
+      to: job.recipient,
+      acceptUrl: job.accept_url,
+      expiresAt: job.expires_at,
+    });
+  } catch {
+    await db.query('SELECT app.fail_email_outbox($1, $2, $3)', [
+      job.id,
+      'delivery failed',
+      maxAttempts,
+    ]);
+    return false;
+  }
+
+  await db.query('SELECT app.complete_email_outbox($1)', [job.id]);
+  return true;
 }
 
 export async function dispatchInvitationEmail(options: {
   db: ApiDb;
-  actorId: string;
-  tenantId: string;
   outboxId: string;
   mailer: Mailer;
+  maxAttempts?: number;
   onFailure: () => void;
-}): Promise<void> {
-  const { db, actorId, tenantId, outboxId, mailer, onFailure } = options;
-  let row: OutboxRow | undefined;
+}): Promise<boolean> {
+  const { db, outboxId, mailer, maxAttempts = 5, onFailure } = options;
+  const job = await claimForId(db, outboxId);
+  if (!job) return false;
+  const delivered = await deliver(db, job, mailer, maxAttempts);
+  if (!delivered) onFailure();
+  return delivered;
+}
 
-  await db.transaction(async (client) => {
-    await setActorContext(client, actorId);
-    await setTenantContext(client, tenantId);
-    const result = await client.query<OutboxRow>(
-      `SELECT invitation_id, tenant_id, recipient, accept_url, expires_at
-       FROM app.email_outbox
-       WHERE id = $1 AND dispatched_at IS NULL`,
-      [outboxId],
-    );
-    row = result.rows[0];
-  });
+export interface OutboxBatchResult {
+  claimed: number;
+  delivered: number;
+  failed: number;
+}
 
-  if (!row) return;
+export async function runOutboxBatch(options: {
+  db: ApiDb;
+  mailer: Mailer;
+  batchSize?: number;
+  maxAttempts?: number;
+  logger: OutboxLogger;
+}): Promise<OutboxBatchResult> {
+  const { db, mailer, batchSize = 20, maxAttempts = 5, logger } = options;
+  const { rows } = await db.query<OutboxJob>(
+    `SELECT id, tenant_id, invitation_id, recipient, accept_url, expires_at, attempts
+     FROM app.claim_email_outbox($1)`,
+    [batchSize],
+  );
 
-  try {
-    await mailer.sendInvitation({
-      invitationId: row.invitation_id,
-      tenantId: row.tenant_id,
-      to: row.recipient,
-      acceptUrl: row.accept_url,
-      expiresAt: row.expires_at,
-    });
-  } catch {
-    onFailure();
-    await db
-      .transaction(async (client) => {
-        await setActorContext(client, actorId);
-        await setTenantContext(client, tenantId);
-        await client.query(
-          "UPDATE app.email_outbox SET last_error = 'delivery failed' WHERE id = $1",
-          [outboxId],
-        );
-      })
-      .catch(() => undefined);
-    return;
+  let delivered = 0;
+  for (const job of rows) {
+    try {
+      if (await deliver(db, job, mailer, maxAttempts)) {
+        delivered += 1;
+      } else {
+        logger.error({ outboxId: job.id }, 'invitation email dispatch failed');
+      }
+    } catch {
+      logger.error({ outboxId: job.id }, 'invitation email dispatch failed');
+    }
   }
 
-  await db.transaction(async (client) => {
-    await setActorContext(client, actorId);
-    await setTenantContext(client, tenantId);
-    await client.query(
-      'UPDATE app.email_outbox SET dispatched_at = now(), last_error = NULL WHERE id = $1',
-      [outboxId],
-    );
-  });
+  return { claimed: rows.length, delivered, failed: rows.length - delivered };
+}
+
+export interface OutboxWorker {
+  stop(): void;
+}
+
+export function startOutboxWorker(options: {
+  db: ApiDb;
+  mailer: Mailer;
+  logger: OutboxLogger;
+  intervalMs?: number;
+  retentionDays?: number;
+  batchSize?: number;
+  maxAttempts?: number;
+}): OutboxWorker {
+  const {
+    db,
+    mailer,
+    logger,
+    intervalMs = 5_000,
+    retentionDays = 30,
+    batchSize = 20,
+    maxAttempts = 5,
+  } = options;
+  let stopped = false;
+  let timer: NodeJS.Timeout | undefined;
+  let pruning = false;
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      await runOutboxBatch({ db, mailer, logger, batchSize, maxAttempts });
+      if (!pruning) {
+        pruning = true;
+        try {
+          await db.query('SELECT app.prune_email_outbox($1)', [retentionDays]);
+        } catch {
+          logger.error({}, 'email outbox retention failed');
+        } finally {
+          pruning = false;
+        }
+      }
+    } catch {
+      logger.error({}, 'email outbox worker tick failed');
+    } finally {
+      if (!stopped) timer = setTimeout(() => void tick(), intervalMs);
+    }
+  };
+
+  timer = setTimeout(() => void tick(), 0);
+  return {
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
 }

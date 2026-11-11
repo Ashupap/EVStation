@@ -1,3 +1,4 @@
+import { Writable } from 'node:stream';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resetDb, startDb, stopDb, type TestDb } from '../../../packages/db/test/helpers.js';
 import { ROUTES } from '../src/routes.js';
@@ -5,7 +6,8 @@ import { BODY_LIMIT_BYTES, buildApp } from '../src/app.js';
 import type { TokenClaims, TokenVerifier } from '../src/auth.js';
 import type { ApiConfig } from '../src/config.js';
 import { assertRuntimeRole, createDb, inspectRuntimeRole, type ApiDb } from '../src/db.js';
-import { MemoryMailer } from '../src/mailer.js';
+import { MemoryMailer, type Mailer } from '../src/mailer.js';
+import { runOutboxBatch } from '../src/outbox.js';
 
 const IDS = {
   platform: '00000000-0000-4000-8000-000000000001',
@@ -73,6 +75,15 @@ const registeredRoutes: string[] = [];
 
 function auth(token: string) {
   return { authorization: `Bearer ${token}` };
+}
+
+async function waitFor(assertion: () => boolean | Promise<boolean>, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await assertion()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('condition was not met before timeout');
 }
 
 beforeAll(async () => {
@@ -156,6 +167,40 @@ describe('skeleton and runtime role', () => {
       expect(events[0]?.message).not.toContain('postgres://');
       expect(events[0]?.message).not.toContain('secret');
     } finally {
+      await local.close();
+    }
+  });
+
+  it('routes pool errors through the redacting API logger', async () => {
+    const lines: string[] = [];
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        lines.push(String(chunk));
+        callback();
+      },
+    });
+    const local = createDb(db.appUrl, 1);
+    const logged = await buildApp({
+      db: local,
+      config: { ...config, logLevel: 'info' },
+      verifier,
+      mailer,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logStream: sink,
+    });
+    await logged.ready();
+    try {
+      local.pool.emit(
+        'error',
+        new Error('connect failed for postgres://user:secret@db.example/evstation'),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      const output = lines.join('\n');
+      expect(output).toContain('database pool error');
+      expect(output).not.toContain('postgres://');
+      expect(output).not.toContain('secret');
+    } finally {
+      await logged.close();
       await local.close();
     }
   });
@@ -277,10 +322,10 @@ describe('authentication', () => {
     }
   });
 
-  it('uses forwarded client IPs only when TRUST_PROXY is enabled', async () => {
+  it('uses forwarded client IPs only from an explicitly trusted proxy', async () => {
     const limited = await buildApp({
       db: apiDb,
-      config: { ...config, trustProxy: true },
+      config: { ...config, trustProxy: ['127.0.0.1'] },
       verifier,
       mailer,
       rateLimit: { max: 100, ipMax: 1, timeWindow: 60_000 },
@@ -316,6 +361,38 @@ describe('authentication', () => {
           })
         ).statusCode,
       ).toBe(200);
+    } finally {
+      await limited.close();
+    }
+  });
+
+  it('ignores spoofed X-Forwarded-For from an untrusted peer', async () => {
+    const limited = await buildApp({
+      db: apiDb,
+      config: { ...config, trustProxy: ['10.0.0.1'] },
+      verifier,
+      mailer,
+      rateLimit: { max: 100, ipMax: 1, timeWindow: 60_000 },
+      logger: false,
+    });
+    await limited.ready();
+    try {
+      const remoteAddress = '203.0.113.50';
+      const headers = { 'x-forwarded-for': '198.51.100.1' };
+      expect(
+        (await limited.inject({ method: 'GET', url: '/health', headers, remoteAddress }))
+          .statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await limited.inject({
+            method: 'GET',
+            url: '/health',
+            headers: { 'x-forwarded-for': '198.51.100.2' },
+            remoteAddress,
+          })
+        ).statusCode,
+      ).toBe(429);
     } finally {
       await limited.close();
     }
@@ -664,7 +741,9 @@ describe('HTTP role x route matrix', () => {
         });
         const label = `${key} as ${actor}`;
         if (allowed.includes(actor)) {
+          expect(response.statusCode, label).not.toBe(401);
           expect(response.statusCode, label).not.toBe(403);
+          expect(response.statusCode, label).toBeLessThan(500);
         } else {
           expect(response.statusCode, label).toBe(403);
         }
@@ -871,24 +950,35 @@ describe('invitations', () => {
     expect(url.search).toBe('');
     const token = new URLSearchParams(url.hash.slice(1)).get('token');
     expect(token).toBeTruthy();
-    expect(mailer.outbox).toHaveLength(1);
+    await waitFor(() => mailer.outbox.length === 1);
     expect(mailer.outbox[0]).toMatchObject({
       invitationId: body.id,
       tenantId: IDS.tenantA,
       to: 'invitee@example.com',
     });
     expect(mailer.outbox[0]?.acceptUrl).toBe(body.accept_url);
+    await waitFor(async () => {
+      const result = await db.superuser.query<{
+        dispatched_at: Date | null;
+        accept_url: string | null;
+      }>('SELECT dispatched_at, accept_url FROM app.email_outbox WHERE invitation_id = $1', [
+        body.id,
+      ]);
+      return result.rows[0]?.dispatched_at !== null;
+    });
     const outbox = await db.superuser.query<{
       recipient: string;
       dispatched_at: Date | null;
-      accept_url: string;
+      accept_url: string | null;
+      attempts: number;
     }>(
-      'SELECT recipient, dispatched_at, accept_url FROM app.email_outbox WHERE invitation_id = $1',
+      'SELECT recipient, dispatched_at, accept_url, attempts FROM app.email_outbox WHERE invitation_id = $1',
       [body.id],
     );
     expect(outbox.rows[0]).toMatchObject({
       recipient: 'invitee@example.com',
-      accept_url: body.accept_url,
+      accept_url: null,
+      attempts: 1,
     });
     expect(outbox.rows[0]?.dispatched_at).not.toBeNull();
 
@@ -963,6 +1053,188 @@ describe('invitations', () => {
     });
     expect(accepted.statusCode).toBe(400);
     expect(accepted.json()).toMatchObject({ error: { code: 'INVITATION_INVALID' } });
+  });
+});
+
+describe('invitation outbox dispatch', () => {
+  it('returns the invitation response before background delivery finishes', async () => {
+    let release!: () => void;
+    let started = false;
+    const blocking: Mailer = {
+      async sendInvitation() {
+        started = true;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      },
+    };
+    const background = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer: blocking,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    await background.ready();
+    try {
+      const created = await background.inject({
+        method: 'POST',
+        url: `/tenants/${IDS.tenantA}/invitations`,
+        headers: auth('adminA'),
+        payload: { email: 'background@example.com', role: 'viewer' },
+      });
+      expect(created.statusCode).toBe(201);
+      await waitFor(() => started);
+      const pending = await db.superuser.query<{ dispatched_at: Date | null }>(
+        'SELECT dispatched_at FROM app.email_outbox WHERE invitation_id = $1',
+        [created.json().id],
+      );
+      expect(pending.rows[0]?.dispatched_at).toBeNull();
+      release();
+      await waitFor(async () => {
+        const result = await db.superuser.query<{ dispatched_at: Date | null }>(
+          'SELECT dispatched_at FROM app.email_outbox WHERE invitation_id = $1',
+          [created.json().id],
+        );
+        return result.rows[0]?.dispatched_at !== null;
+      });
+    } finally {
+      await background.close();
+    }
+  });
+
+  it('retries a failed delivery through the worker and scrubs the token', async () => {
+    const flaky = new (class implements Mailer {
+      calls = 0;
+      sent: string[] = [];
+      async sendInvitation(message: { acceptUrl: string }) {
+        this.calls += 1;
+        if (this.calls === 1) throw new Error('temporary failure');
+        this.sent.push(message.acceptUrl);
+      }
+    })();
+    const failing = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer: flaky,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    await failing.ready();
+    try {
+      const created = await failing.inject({
+        method: 'POST',
+        url: `/tenants/${IDS.tenantA}/invitations`,
+        headers: auth('adminA'),
+        payload: { email: 'retry@example.com', role: 'viewer' },
+      });
+      expect(created.statusCode).toBe(201);
+      await waitFor(async () => {
+        const result = await db.superuser.query<{ last_error: string | null }>(
+          'SELECT last_error FROM app.email_outbox WHERE invitation_id = $1',
+          [created.json().id],
+        );
+        return result.rows[0]?.last_error !== null;
+      });
+      const pending = await db.superuser.query<{
+        accept_url: string | null;
+        dispatched_at: Date | null;
+        attempts: number;
+      }>(
+        'SELECT accept_url, dispatched_at, attempts FROM app.email_outbox WHERE invitation_id = $1',
+        [created.json().id],
+      );
+      expect(pending.rows[0]).toMatchObject({ dispatched_at: null, attempts: 1 });
+      expect(pending.rows[0]?.accept_url).not.toBeNull();
+      await db.superuser.query(
+        'UPDATE app.email_outbox SET next_attempt_at = now() WHERE invitation_id = $1',
+        [created.json().id],
+      );
+
+      const result = await runOutboxBatch({
+        db: apiDb,
+        mailer: flaky,
+        logger: { error: () => undefined },
+      });
+      expect(result).toEqual({ claimed: 1, delivered: 1, failed: 0 });
+      expect(flaky.sent).toHaveLength(1);
+
+      const delivered = await db.superuser.query<{
+        accept_url: string | null;
+        dispatched_at: Date | null;
+        last_error: string | null;
+        attempts: number;
+      }>(
+        `SELECT accept_url, dispatched_at, last_error, attempts
+         FROM app.email_outbox WHERE invitation_id = $1`,
+        [created.json().id],
+      );
+      expect(delivered.rows[0]?.dispatched_at).not.toBeNull();
+      expect(delivered.rows[0]?.accept_url).toBeNull();
+      expect(delivered.rows[0]?.last_error).toBeNull();
+      expect(delivered.rows[0]?.attempts).toBe(2);
+    } finally {
+      await failing.close();
+    }
+  });
+
+  it('scrubs the token when retries are exhausted and prunes retained rows', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: `/tenants/${IDS.tenantA}/invitations`,
+      headers: auth('adminA'),
+      payload: { email: 'exhausted@example.com', role: 'viewer' },
+    });
+    expect(created.statusCode).toBe(201);
+    await waitFor(async () => {
+      const result = await db.superuser.query<{ dispatched_at: Date | null }>(
+        'SELECT dispatched_at FROM app.email_outbox WHERE invitation_id = $1',
+        [created.json().id],
+      );
+      return result.rows[0]?.dispatched_at !== null;
+    });
+
+    await db.superuser.query(
+      `UPDATE app.email_outbox
+       SET dispatched_at = NULL, accept_url = 'http://localhost/accept#token=secret',
+           attempts = 4, next_attempt_at = now(), last_error = NULL
+       WHERE invitation_id = $1`,
+      [created.json().id],
+    );
+    const exhausted = await runOutboxBatch({
+      db: apiDb,
+      mailer: {
+        async sendInvitation() {
+          throw new Error('still failing');
+        },
+      },
+      maxAttempts: 5,
+      logger: { error: () => undefined },
+    });
+    expect(exhausted).toEqual({ claimed: 1, delivered: 0, failed: 1 });
+
+    const row = await db.superuser.query<{ accept_url: string | null; last_error: string | null }>(
+      'SELECT accept_url, last_error FROM app.email_outbox WHERE invitation_id = $1',
+      [created.json().id],
+    );
+    expect(row.rows[0]).toEqual({ accept_url: null, last_error: 'delivery failed' });
+
+    await db.superuser.query(
+      `UPDATE app.email_outbox
+       SET dispatched_at = now() - interval '31 days' WHERE invitation_id = $1`,
+      [created.json().id],
+    );
+    const pruned = await db.app.query<{ pruned: number }>(
+      'SELECT app.prune_email_outbox(30) AS pruned',
+    );
+    expect(Number(pruned.rows[0]?.pruned)).toBeGreaterThanOrEqual(0);
+    const gone = await db.superuser.query(
+      'SELECT 1 FROM app.email_outbox WHERE invitation_id = $1',
+      [created.json().id],
+    );
+    expect(gone.rowCount).toBe(0);
   });
 });
 
@@ -1042,6 +1314,7 @@ describe('invitation delivery', () => {
       });
       expect(created.statusCode).toBe(201);
       expect(created.json()).not.toHaveProperty('accept_url');
+      await waitFor(() => productionMailer.outbox.length === 1);
       const message = productionMailer.outbox[0];
       expect(message?.to).toBe('prod-invite@example.com');
       expect(message?.acceptUrl).toContain('#token=');

@@ -178,7 +178,9 @@ APIs).
   — security profile 0, station id is the last path segment (CitrineOS v2.1.0
   behavior)
 - Keycloak: <http://localhost:8180> — realm `evstation`, client `dashboard`
-  (public, PKCE, redirect URIs limited to localhost). Bootstrap admin login
+  (confidential, Authorization Code + PKCE, redirect URIs limited to
+  localhost). `pnpm dev:stack` applies the generated client secret from
+  `infra/compose/.env` after Keycloak is healthy. Bootstrap admin login
   comes from `infra/compose/.env`. The realm imports with self-registration
   and password-reset off, brute-force lockout on (`bruteForceProtected:
 true` — check via the admin API), `sslRequired=external`. Management
@@ -196,6 +198,25 @@ true` — check via the admin API), `sslRequired=external`. Management
   Never expose 8090 beyond 127.0.0.1.
 - EVStation dashboard (Phase 1): dev port **3200**; API service (Phase 1): dev
   port **4000** — both reserved now, configured via their app `.env.example`.
+
+## Invitation outbox worker and trusted proxies
+
+The API writes invitation email to `app.email_outbox`; delivery must not block
+the HTTP response. Run the worker beside the API with the same
+`DATABASE_URL_APP`:
+
+```shell
+OUTBOX_MAILER_MODULE=./path/to/mailer.mjs pnpm --filter @evstation/api worker
+```
+
+The module must export `createMailer(): Mailer`. `OUTBOX_INTERVAL_MS`,
+`OUTBOX_MAX_ATTEMPTS` and `OUTBOX_RETENTION_DAYS` tune retry/pruning. Watch the
+worker's JSON error log for `invitation email dispatch failed`; rows remain
+retryable until the attempt limit, after which the token is scrubbed.
+
+`TRUST_PROXY` is `false`, a hop count (`1`–`10`), or a comma-separated
+proxy/CIDR list (`127.0.0.1,10.0.0.0/8`). `true` is rejected: the proxy must be
+identified explicitly so spoofed `X-Forwarded-For` cannot evade the IP limit.
 
 ## OCPP WebSocket exposure (Phase 0 → real chargers)
 

@@ -65,12 +65,33 @@ describe('database role URLs', () => {
     });
   });
 
-  it('accepts explicit HOST and TRUST_PROXY overrides', () => {
+  it('accepts explicit HOST and a bounded proxy hop count', () => {
     expect(loadConfig({ ...base, HOST: '0.0.0.0' } as NodeJS.ProcessEnv).host).toBe('0.0.0.0');
-    expect(loadConfig({ ...base, TRUST_PROXY: 'true' } as NodeJS.ProcessEnv).trustProxy).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY: '2' } as NodeJS.ProcessEnv).trustProxy).toBe(2);
+    expect(() => loadConfig({ ...base, TRUST_PROXY: '11' } as NodeJS.ProcessEnv)).toThrow(
+      /TRUST_PROXY hop count/,
+    );
+    expect(() => loadConfig({ ...base, TRUST_PROXY: 'true' } as NodeJS.ProcessEnv)).toThrow(
+      /hop count or a comma-separated/,
+    );
     expect(() => loadConfig({ ...base, TRUST_PROXY: 'yes' } as NodeJS.ProcessEnv)).toThrow(
       /TRUST_PROXY/,
     );
+  });
+
+  it('accepts an explicit trusted proxy/CIDR list', () => {
+    expect(
+      loadConfig({
+        ...base,
+        TRUST_PROXY: '127.0.0.1, 10.0.0.0/8,::1',
+      } as NodeJS.ProcessEnv).trustProxy,
+    ).toEqual(['127.0.0.1', '10.0.0.0/8', '::1']);
+    expect(() => loadConfig({ ...base, TRUST_PROXY: '10.0.0.0/33' } as NodeJS.ProcessEnv)).toThrow(
+      /invalid CIDR/,
+    );
+    expect(() =>
+      loadConfig({ ...base, TRUST_PROXY: 'proxy.internal' } as NodeJS.ProcessEnv),
+    ).toThrow(/invalid address/);
   });
 
   it('requires https OIDC issuer and JWKS in production', () => {

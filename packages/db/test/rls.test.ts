@@ -1155,6 +1155,24 @@ describe('least-privilege grants and defaults', () => {
       "SELECT has_table_privilege('evstation_app', 'app.membership_sites', 'UPDATE') AS ok",
     );
     expect(tableUpdate.rows[0]?.ok).toBe(false);
+
+    const selectChecks: Array<[string, boolean]> = [
+      ['recipient', true],
+      ['dispatched_at', true],
+      ['attempts', true],
+      ['accept_url', false],
+    ];
+    for (const [column, expected] of selectChecks) {
+      const { rows } = await db.superuser.query<{ ok: boolean }>(
+        'SELECT has_column_privilege($1, $2, $3, $4) AS ok',
+        ['evstation_app', 'app.email_outbox', column, 'SELECT'],
+      );
+      expect(rows[0]?.ok, `email_outbox.${column} SELECT`).toBe(expected);
+    }
+    const outboxTableSelect = await db.superuser.query<{ ok: boolean }>(
+      "SELECT has_table_privilege('evstation_app', 'app.email_outbox', 'SELECT') AS ok",
+    );
+    expect(outboxTableSelect.rows[0]?.ok).toBe(false);
   });
 
   test('future functions do not inherit PUBLIC EXECUTE', async () => {

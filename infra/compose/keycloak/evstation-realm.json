@@ -16,8 +16,8 @@
       "clientId": "dashboard",
       "enabled": true,
       "protocol": "openid-connect",
-      "description": "Operator dashboard (public SPA). Authorization Code + PKCE only. Redirect URIs must match the dashboard dev port (3200; see docs/RUNBOOK.md 'Changing dev ports').",
-      "publicClient": true,
+      "description": "Operator dashboard (confidential BFF). Authorization Code + PKCE only; secret is applied from env by the dev seeder. Redirect URIs must match the dashboard dev port (3200; see docs/RUNBOOK.md).",
+      "publicClient": false,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
@@ -29,7 +29,8 @@
       "optionalClientScopes": [],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "clientAuthenticatorType": "client-secret"
     }
   ],
   "roles": {
