@@ -24,7 +24,8 @@ async function readTenantId(request: NextRequest): Promise<unknown> {
 }
 
 export async function POST(request: NextRequest) {
-  if (!hasValidOrigin(request)) {
+  const config = loadDashboardConfig();
+  if (!hasValidOrigin(request, config.oidcRedirectUri)) {
     return NextResponse.json(
       { error: { code: 'CSRF_REJECTED', message: 'invalid origin' } },
       { status: 403 },
@@ -60,7 +61,6 @@ export async function POST(request: NextRequest) {
   }
 
   getSessionStore().update(auth.sessionId, { tenantId: tenantId || undefined });
-  const config = loadDashboardConfig();
   const response = NextResponse.redirect(dashboardUrl(config, '/app'), 303);
   response.headers.set('cache-control', 'no-store');
   return response;

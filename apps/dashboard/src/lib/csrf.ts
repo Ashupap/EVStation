@@ -1,28 +1,46 @@
-function headerValue(headers: Headers, name: string): string | undefined {
-  return headers.get(name)?.split(',')[0]?.trim() || undefined;
+function isUnsafe(value: string): boolean {
+  return /[\u0000-\u001f\u007f\\]/u.test(value);
 }
 
-export function hasValidOrigin(request: Request): boolean {
+function decode(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+export function hasValidOrigin(request: Request, expectedOrigin: string): boolean {
   const origin = request.headers.get('origin');
   if (!origin) return false;
 
-  let originUrl: URL;
   try {
-    originUrl = new URL(origin);
+    return new URL(origin).origin === new URL(expectedOrigin).origin;
   } catch {
     return false;
   }
-
-  const host = headerValue(request.headers, 'x-forwarded-host') ?? request.headers.get('host');
-  if (!host) return false;
-  const protocol =
-    headerValue(request.headers, 'x-forwarded-proto') ?? new URL(request.url).protocol.slice(0, -1);
-
-  return originUrl.protocol === `${protocol}:` && originUrl.host === host;
 }
 
-export function safeReturnTo(value: string | null): string {
-  if (!value || value.length > 512) return '/app';
-  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return '/app';
-  return value;
+export function safeReturnTo(value: string | null, base: string): string {
+  const fallback = '/app';
+  if (!value || value.length > 512) return fallback;
+  if (!value.startsWith('/') || value.startsWith('//')) return fallback;
+  if (isUnsafe(value)) return fallback;
+
+  const decoded = decode(value);
+  if (decoded === undefined || isUnsafe(decoded) || decoded.startsWith('//')) return fallback;
+
+  let target: URL;
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(base);
+    target = new URL(decoded, baseUrl);
+  } catch {
+    return fallback;
+  }
+
+  if (target.origin !== baseUrl.origin) return fallback;
+  if (target.pathname !== '/app' && !target.pathname.startsWith('/app/')) return fallback;
+
+  return `${target.pathname}${target.search}${target.hash}`;
 }

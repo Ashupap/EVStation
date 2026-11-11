@@ -33,7 +33,10 @@ export async function GET(request: NextRequest) {
       absoluteExpiresAt: Date.now() + config.sessionAbsoluteTtlSeconds * 1000,
     });
     const response = NextResponse.redirect(
-      dashboardUrl(config, safeReturnTo(transaction.returnTo)),
+      dashboardUrl(
+        config,
+        safeReturnTo(transaction.returnTo, dashboardUrl(config, '/').toString()),
+      ),
     );
     setSessionCookie(response, sessionId, config);
     clearLoginCookie(response, config);

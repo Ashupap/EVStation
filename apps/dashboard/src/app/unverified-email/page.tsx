@@ -1,12 +1,10 @@
 import { redirect } from 'next/navigation';
-import { getAuthContext } from '@/lib/auth';
+import { hasServerSession } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export default async function UnverifiedEmailPage() {
-  const auth = await getAuthContext();
-  if (!auth) redirect('/login');
-  if (auth.principal.email_verified) redirect('/app');
+  if (!(await hasServerSession())) redirect('/login');
 
   return (
     <main className="grid min-h-screen place-items-center px-6 py-12">
@@ -18,9 +16,8 @@ export default async function UnverifiedEmailPage() {
           Verify your email address
         </h1>
         <p className="mt-4 text-sm leading-6 text-slate-600">
-          We cannot open the operations console for <strong>{auth.principal.email}</strong> until
-          your email address is verified. Check your inbox for the verification message, then sign
-          in again.
+          We cannot open the operations console until your email address is verified. Check your
+          inbox for the verification message, then sign in again.
         </p>
         <form action="/auth/logout" method="post" className="mt-8">
           <button

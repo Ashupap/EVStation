@@ -87,6 +87,60 @@ test('rejects state-changing BFF requests with a foreign Origin', async ({ page 
   await expect(page.getByText('Tenant Alpha').first()).toBeVisible();
 });
 
+test('sets hardened security headers with a nonce on page responses', async ({ page }) => {
+  const response = await page.goto('/login');
+  const headers = response?.headers() ?? {};
+  const csp = headers['content-security-policy'] ?? '';
+
+  expect(csp).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/u);
+  expect(csp).toContain("frame-ancestors 'none'");
+  expect(csp).toContain("object-src 'none'");
+  expect(csp).toContain("base-uri 'self'");
+  expect(csp).toContain("form-action 'self'");
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['referrer-policy']).toBe('same-origin');
+  expect(headers['x-frame-options']).toBe('DENY');
+  expect(headers['permissions-policy']).toContain('camera=()');
+
+  await expect(page.locator('script[nonce]').first()).toHaveCount(1);
+  const nonce = await page.evaluate(() => document.querySelector('script[nonce]')?.nonce ?? '');
+  expect(nonce).toBeTruthy();
+  expect(csp).toContain(`'nonce-${nonce}'`);
+});
+
+test('never redirects a malicious returnTo off the dashboard origin', async ({ page }) => {
+  const response = await page.context().request.get('/auth/login?returnTo=//evil.example', {
+    maxRedirects: 0,
+  });
+  const location = response.headers()['location'] ?? '';
+  expect(location.startsWith('http://evil.example')).toBe(false);
+  expect(location.startsWith('https://evil.example')).toBe(false);
+});
+
+test('rejects logout CSRF and keeps the session active', async ({ page }) => {
+  await login(page);
+  const response = await page.context().request.post('/auth/logout', {
+    headers: { origin: 'http://evil.example' },
+  });
+  expect(response.status()).toBe(403);
+
+  await page.goto('/app');
+  await expect(page.getByText('Tenant Alpha').first()).toBeVisible();
+});
+
+test('rejects invitation acceptance CSRF without calling the API', async ({ page }) => {
+  await login(page, 'viewer');
+  const response = await page.context().request.post('/api/invitations/accept', {
+    headers: { origin: 'http://evil.example', 'content-type': 'application/json' },
+    data: { token: 'good-invitation-token-1234567890' },
+  });
+  expect(response.status()).toBe(403);
+
+  const last = await page.context().request.get('http://127.0.0.1:4100/_debug/last');
+  const request = (await last.json()) as { path: string };
+  expect(request.path).not.toBe('/invitations/accept');
+});
+
 test('forwards the access token, request id and end-user IP to the API only', async ({
   page,
   context,

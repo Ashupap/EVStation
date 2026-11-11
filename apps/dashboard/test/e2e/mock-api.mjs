@@ -117,10 +117,13 @@ const server = http.createServer(async (request, response) => {
   };
 
   if (url.pathname === '/me' && request.method === 'GET') {
-    const email =
-      persona === 'unverified'
-        ? 'unverified@example.com'
-        : `${persona === 'multitenant' ? 'multi' : persona}@example.com`;
+    if (persona === 'unverified') {
+      json(response, 403, {
+        error: { code: 'EMAIL_UNVERIFIED', message: 'email_not_verified' },
+      });
+      return;
+    }
+    const email = `${persona === 'multitenant' ? 'multi' : persona}@example.com`;
     json(response, 200, {
       id: `90000000-0000-4000-8000-00000000000${persona === 'admin' ? '1' : '2'}`,
       email,
@@ -132,7 +135,7 @@ const server = http.createServer(async (request, response) => {
             : persona === 'manager'
               ? 'Sam Manager'
               : 'Test User',
-      email_verified: persona !== 'unverified',
+      email_verified: true,
       is_platform_admin: persona === 'admin',
       memberships: memberships[persona],
     });

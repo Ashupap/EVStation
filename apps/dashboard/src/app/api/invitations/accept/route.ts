@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { apiFetch } from '@/lib/api';
 import { getAuthContext } from '@/lib/auth';
+import { loadDashboardConfig } from '@/lib/config';
 import { hasValidOrigin } from '@/lib/csrf';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,8 @@ const acceptedSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  if (!hasValidOrigin(request)) {
+  const config = loadDashboardConfig();
+  if (!hasValidOrigin(request, config.oidcRedirectUri)) {
     return NextResponse.json(
       { error: { code: 'CSRF_REJECTED', message: 'invalid origin' } },
       { status: 403 },

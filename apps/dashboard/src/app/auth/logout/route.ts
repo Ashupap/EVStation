@@ -8,14 +8,14 @@ import { getSessionStore } from '@/lib/session-store';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
-  if (!hasValidOrigin(request)) {
+  const config = loadDashboardConfig();
+  if (!hasValidOrigin(request, config.oidcRedirectUri)) {
     return NextResponse.json(
       { error: { code: 'CSRF_REJECTED', message: 'invalid origin' } },
       { status: 403 },
     );
   }
 
-  const config = loadDashboardConfig();
   const sessionId = request.cookies.get(config.sessionCookieName)?.value;
   if (sessionId) {
     const session = getSessionStore().get(sessionId);

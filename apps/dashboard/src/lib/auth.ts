@@ -1,13 +1,15 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { ResponseBodyError } from 'openid-client';
 import { cache } from 'react';
-import { apiFetch, parseApiJson } from './api';
+import { apiFetch } from './api';
 import { loadDashboardConfig } from './config';
 import { readSessionCookie } from './cookies';
 import { refreshTokens } from './oidc';
+import type { Principal } from './types';
+import { principalSchema, type Membership, type Role } from './types';
 import type { SessionRecord } from './session-store';
 import { getSessionStore } from './session-store';
-import { principalSchema, type Membership, type Principal, type Role } from './types';
 
 export interface AuthContext {
   sessionId: string;
@@ -20,7 +22,42 @@ export interface TenantContext extends AuthContext {
   tenantId: string;
 }
 
-async function refreshSession(
+export type MeResult =
+  | { kind: 'ok'; principal: Principal }
+  | { kind: 'unauthenticated' }
+  | { kind: 'unverified' }
+  | { kind: 'forbidden'; code: string }
+  | { kind: 'error'; status: number };
+
+export async function authenticateMe(response: Response): Promise<MeResult> {
+  if (response.status === 401) return { kind: 'unauthenticated' };
+  if (response.status === 403) {
+    let code = 'FORBIDDEN';
+    try {
+      const body = (await response.json()) as { error?: { code?: unknown } };
+      if (typeof body.error?.code === 'string') code = body.error.code;
+    } catch {
+      // A 403 without a JSON body is still an authorization failure.
+    }
+    return code === 'EMAIL_UNVERIFIED' ? { kind: 'unverified' } : { kind: 'forbidden', code };
+  }
+  if (!response.ok) return { kind: 'error', status: response.status };
+
+  try {
+    return { kind: 'ok', principal: principalSchema.parse(await response.json()) };
+  } catch {
+    return { kind: 'error', status: 502 };
+  }
+}
+
+const globalRefresh = globalThis as typeof globalThis & {
+  __evstationRefreshFlights?: Map<string, Promise<SessionRecord | undefined>>;
+};
+const refreshFlights =
+  globalRefresh.__evstationRefreshFlights ?? new Map<string, Promise<SessionRecord | undefined>>();
+globalRefresh.__evstationRefreshFlights = refreshFlights;
+
+async function performRefresh(
   sessionId: string,
   session: SessionRecord,
 ): Promise<SessionRecord | undefined> {
@@ -37,12 +74,27 @@ async function refreshSession(
       idToken: tokens.id_token ?? session.idToken,
       accessExpiresAt: Date.now() + Math.max(30, expiresIn) * 1000,
     });
-    if (!updated) return undefined;
     return updated;
-  } catch {
-    getSessionStore().delete(sessionId);
+  } catch (error) {
+    if (error instanceof ResponseBodyError && error.error === 'invalid_grant') {
+      getSessionStore().delete(sessionId);
+    }
     return undefined;
   }
+}
+
+export function refreshSession(
+  sessionId: string,
+  session: SessionRecord,
+): Promise<SessionRecord | undefined> {
+  const existing = refreshFlights.get(sessionId);
+  if (existing) return existing;
+
+  const tracked = performRefresh(sessionId, session).finally(() => {
+    if (refreshFlights.get(sessionId) === tracked) refreshFlights.delete(sessionId);
+  });
+  refreshFlights.set(sessionId, tracked);
+  return tracked;
 }
 
 async function getSession(): Promise<{ sessionId: string; session: SessionRecord } | undefined> {
@@ -59,6 +111,12 @@ async function getSession(): Promise<{ sessionId: string; session: SessionRecord
   return { sessionId, session };
 }
 
+export async function hasServerSession(): Promise<boolean> {
+  const config = loadDashboardConfig();
+  const sessionId = await readSessionCookie(config);
+  return Boolean(sessionId && getSessionStore().get(sessionId));
+}
+
 export const getAuthContext = cache(async (): Promise<AuthContext | undefined> => {
   const current = await getSession();
   if (!current) return undefined;
@@ -69,12 +127,16 @@ export const getAuthContext = cache(async (): Promise<AuthContext | undefined> =
     { method: 'GET' },
     new Headers(incomingHeaders),
   );
-  if (response.status === 401) {
+  const result = await authenticateMe(response);
+
+  if (result.kind === 'unauthenticated') {
     getSessionStore().delete(current.sessionId);
     return undefined;
   }
-  const principal = await parseApiJson(response, principalSchema);
-  return { ...current, principal };
+  if (result.kind === 'unverified') redirect('/unverified-email');
+  if (result.kind !== 'ok') return undefined;
+
+  return { ...current, principal: result.principal };
 });
 
 export function activeMembership(

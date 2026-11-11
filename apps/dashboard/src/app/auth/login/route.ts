@@ -9,7 +9,10 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   const config = loadDashboardConfig();
-  const returnTo = safeReturnTo(request.nextUrl.searchParams.get('returnTo'));
+  const returnTo = safeReturnTo(
+    request.nextUrl.searchParams.get('returnTo'),
+    dashboardUrl(config, '/').toString(),
+  );
   try {
     const login = await buildLoginUrl();
     const transactionId = getLoginStore().create({
