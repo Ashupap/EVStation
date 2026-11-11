@@ -28,6 +28,12 @@ jobs:
         run: pnpm smoke
       - name: Smoke test (rerun without cleanup proves idempotency)
         run: pnpm smoke
+      - name: Prepare Phase 1 database
+        run: pnpm db:migrate && pnpm db:seed
+      - name: Install dashboard browser
+        run: pnpm --filter @evstation/dashboard exec playwright install --with-deps chromium
+      - name: Real Keycloak + API dashboard E2E
+        run: pnpm --filter @evstation/dashboard test:e2e:real
       - name: Collect artifacts on failure
         if: failure()
         run: |
@@ -35,6 +41,7 @@ jobs:
           docker logs evstation-citrine-1 > smoke-citrine.log 2>&1 || true
           docker logs evstation-graphql-engine-1 > smoke-hasura.log 2>&1 || true
           pnpm health > smoke-health.txt || true
+          docker logs evstation-keycloak-1 > smoke-keycloak.log 2>&1 || true
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

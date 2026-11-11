@@ -228,6 +228,10 @@ services:
       # (dev-only values; see .env.example). Never committed.
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:?set KC_BOOTSTRAP_ADMIN_USERNAME in infra/compose/.env}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD in infra/compose/.env}
+      # Pin the issuer to the public dev URL. Without this Keycloak derives it
+      # from whichever host reaches the token endpoint, breaking API audience
+      # validation when tooling and browsers use different loopback names.
+      KC_HOSTNAME: http://localhost:8180
     ports:
       - 127.0.0.1:${KEYCLOAK_HTTP_HOST_PORT:-8180}:8080 # HTTP (frontend + OIDC)
       - 127.0.0.1:${KEYCLOAK_MGMT_HOST_PORT:-8181}:9000 # management port (health metrics)

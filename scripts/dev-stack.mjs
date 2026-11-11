@@ -76,7 +76,6 @@ function ensureDashboardEnv() {
     OIDC_CLIENT_ID: 'dashboard',
     OIDC_CLIENT_SECRET: vars.KC_DASHBOARD_CLIENT_SECRET,
     OIDC_REDIRECT_URI: 'http://localhost:3200/auth/callback',
-    SESSION_SECRET: vars.DASHBOARD_SESSION_SECRET,
     SESSION_COOKIE_NAME: 'evstation_session',
     SESSION_ABSOLUTE_TTL_SECONDS: '28800',
     COOKIE_SECURE: 'false',
