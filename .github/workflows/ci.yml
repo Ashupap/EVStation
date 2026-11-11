@@ -4,12 +4,17 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   checks:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.3
       - uses: actions/setup-node@v7
         with:
           node-version: 24.22.2
@@ -19,3 +24,5 @@ jobs:
       - run: pnpm format:check .
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm --filter @evstation/dashboard exec playwright install --with-deps chromium
+      - run: pnpm --filter @evstation/dashboard test:e2e

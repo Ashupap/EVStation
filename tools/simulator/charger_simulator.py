@@ -4,6 +4,7 @@ Minimal OCPP 1.6J charger simulator for testing a CSMS (e.g. CitrineOS).
 Usage examples:
   python charger_simulator.py --url ws://localhost:8081 --id cp001
   python charger_simulator.py --url ws://localhost:8081 --id cp001 --no-session
+  python charger_simulator.py --url ws://localhost:8081 --id cp001 --exit-after-boot
   python charger_simulator.py --url ws://localhost:8081 --id cp001 --exit-after-session
 
 The charger dials OUT to <url>/<id>, exactly as a real charger does.
@@ -105,6 +106,9 @@ class Charger:
         })
         assert_eq("Accepted", boot.get("status"), "BootNotification.status")
         interval = max(int(boot.get("interval", 30)), 5)
+        if self.args.exit_after_boot:
+            print("\nBoot accepted; exiting cleanly (--exit-after-boot).")
+            raise SystemExit(EX_OK)
         asyncio.create_task(self.heartbeat_loop(interval))
 
         # 2. Report connector status
@@ -170,6 +174,8 @@ async def main():
     p.add_argument("--password", help="Basic-auth password (security profile 1/2)")
     p.add_argument("--id-tag", default="DEADBEEF", help="RFID tag used for the test session")
     p.add_argument("--no-session", action="store_true", help="Only boot + heartbeat")
+    p.add_argument("--exit-after-boot", action="store_true",
+                   help="Exit 0 after BootNotification is Accepted")
     p.add_argument("--exit-after-session", action="store_true",
                    help="Exit with code 0 after the charging session completes (CI mode); "
                         "default keeps heartbeating for manual CSMS experimentation")

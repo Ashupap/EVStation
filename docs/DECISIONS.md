@@ -54,6 +54,13 @@ Test-only constants are flagged where relevant:
   `pnpm-lock.yaml`; CI blocks unnoticed drift. `.npmrc` sets
   `engine-strict=true`, so installs and scripts fail fast on unsupported Node
   versions instead of only warning.
+- **Phase 1 amendment — dependency age gate.** A new dependency or upgrade may
+  only be pinned after verifying on the npm registry that the exact version
+  exists and was published **at least 14 days** before adoption (`npm view
+<pkg> version` + `npm view <pkg> time --json`). Versions younger than that
+  are replaced with the previous stable release, or the pin waits. The
+  verification (package → version → publish date) is recorded in the upgrade
+  commit message.
 
 ## Infrastructure
 
@@ -324,3 +331,321 @@ infra/compose/docker-compose.yml` for ours-vs-new; repeat for
   upgrade considerations in Phase 5; dev containers are not exposed, so no
   free-security-update gap bites us in Phase 0. Any upgrade changes this
   ADR with a dated snapshot line.
+
+## Phase 1 — authentication, tenancy, RLS
+
+### ADR-0011: Database roles, RLS and per-request tenant context
+
+- **Context.** Phase 1 must make tenant isolation a database guarantee, not an
+  API convention (PRD §5.3, Phase 1). The app must not be able to bypass RLS
+  even with a mis-scoped query. Helper functions used inside RLS policies
+  cannot read `memberships`/`platform_admins` as the app role without either
+  recursion (policy → helper → policy) or RLS filtering their own lookups,
+  and a `SECURITY DEFINER` function owned by the (NOBYPASSRLS, FORCE-RLS)
+  table owner is still subject to RLS — proven by a test before the fix
+  (`packages/db/test` "owner-owned definer is blocked").
+- **Decision.**
+  - Roles: `evstation` (container superuser; bootstrap + dev/test seed only),
+    `evstation_owner` (LOGIN, NOSUPERUSER, NOBYPASSRLS; owns tables and
+    migrations), `evstation_app` (LOGIN, NOSUPERUSER, NOBYPASSRLS, owns
+    nothing; DML grants only), `evstation_definer` (NOLOGIN **BYPASSRLS**;
+    owns **only** the audited `SECURITY DEFINER` helper/accept functions).
+  - **The API sets exactly two GUCs**, transaction-locally:
+    `app.actor_id` and `app.tenant_id`. It does **not** set role, site scope
+    or platform-admin flags — a bug there would otherwise become an RLS
+    bypass. The database derives the rest:
+    - `app.actor_id()` / `app.tenant_id()` normalize unset settings to NULL;
+    - `app.is_platform_admin()` reads `platform_admins` for the actor;
+    - `app.actor_role()` reads the actor's membership in `app.tenant_id()`;
+    - `app.actor_site_ids()` reads `membership_sites` for that membership;
+    - `app.tenant_id()` returns **NULL** unless the actor is a member of the
+      requested tenant or a platform admin, and NULL for suspended tenants
+      (fail-closed: `tenant_id = NULL` matches no rows).
+  - All helpers are `SECURITY DEFINER`, owned by `evstation_definer`, with
+    `SET search_path = pg_catalog, app, pg_temp`, `REVOKE ALL ... FROM
+PUBLIC`, `GRANT EXECUTE` to `evstation_app` only. They are `STABLE`.
+  - `FORCE ROW LEVEL SECURITY` on every tenant table; app role has no DDL,
+    no `TRUNCATE`, no ownership, cannot `SET ROLE` the owner; API boot fails
+    if the app URL equals the owner/migrator URL or the connected role has
+    `rolbypassrls = true`.
+  - Invitation acceptance runs through one `SECURITY DEFINER` function owned
+    by `evstation_definer` (see ADR-0014); the invitee has no tenant context
+    yet, so ordinary policies cannot admit the membership insert.
+  - Policies: `tenants` SELECT = active tenant, platform admin, **or any
+    tenant the actor is a member of** (tenant switcher; the tenant directory
+    stays global for platform admins); every other tenant-scoped read requires
+    the tenant GUC, including for platform admins: `memberships` SELECT = own
+    rows + selected-tenant rows for managers; `users` SELECT = self +
+    selected-tenant members for managers (viewers/site managers cannot
+    enumerate users); `sites` = selected-tenant read for admins/viewers, site
+    scope for site managers, writes as per the matrix; `invitations` and
+    `audit_log` selected-tenant managers only. A platform admin with no tenant
+    GUC therefore sees the tenant directory and its own user row, but no
+    tenant-scoped rows. `audit_log` inserts require `actor_id =
+app.actor_id()` with no UPDATE/DELETE grants plus an append-only trigger
+    backstop.
+  - Membership safety rules are enforced in the database as well as in
+    `authorize()`: `UNIQUE(user_id, tenant_id)`; deleting/demoting the last
+    `tenant_admin` is rejected; granting a role above the actor's own is
+    rejected (platform admins exempt).
+  - `membership_sites(membership_id, site_id)` replaces a `uuid[]` column so
+    site deletion cannot leave dangling scope entries (FKs, `ON DELETE
+CASCADE`); a deferred constraint trigger requires site managers to have
+    at least one site.
+  - `tenants` UPDATE is intentionally limited to the `status` column. Renaming
+    a tenant (or changing its slug) requires a platform-admin-only
+    `SECURITY DEFINER` function if the Phase 1 API needs it; do not widen the
+    column grant.
+  - `users`/`memberships` describe **operator staff** only. EV driver
+    accounts are a separate concern (Phase 6) and must not be stored in
+    `users`/`memberships`; driver login must not receive an operator
+    membership.
+  - **New tenant tables** must use the 0014 pattern: every zero-argument
+    `app.*` stable helper appears only inside `(SELECT app.helper())`, inline
+    membership probes where an index exists, FORCE RLS, and explicit
+    least-privilege grants. Require an EXPLAIN before merge at 1M rows for the
+    table's common list query (the 100k-row evidence in
+    `docs/evidence/phase1-policy-perf.log` is the baseline).
+  - **Offboarding is soft-delete only in Phase 1.** Deactivate/suspend rather
+    than delete `users`/`tenants`; there is no purge endpoint. The append-only
+    audit trigger blocks hard deletes that would orphan audit history, so a
+    future retention/erasure feature needs an explicit, audited design (and
+    likely a separate archive).
+- **Consequences.** Hand-written SQL migrations are the source of truth for
+  roles, grants, policies, triggers and functions; drizzle-kit's generated
+  diffs are **not** allowed to own or regenerate policy/role DDL (guarded by
+  `drizzle.config.ts` generating only table diffs into designated files and a
+  test asserting the policy/role migration files are untouched). The seed
+  runs as the container superuser (dev/test only, refused when
+  `NODE_ENV=production`). Denied (403) attempts are audited in a **separate
+  transaction** because the request transaction may roll back. A fully
+  compromised API process can still set GUCs — RLS protects against API bugs,
+  not a hostile server; this trust boundary is accepted.
+- **Migration execution.** Schema/function DDL runs through `pnpm db:migrate`
+  connected as the container superuser (`evstation`), while every schema
+  object is explicitly owned by `evstation_owner` (`SET ROLE` in the SQL
+  file). The owner role stays `NOBYPASSRLS` and is never granted membership
+  in `evstation_definer`, so it cannot `SET ROLE` into the BYPASSRLS role;
+  superuser is required only to create the definer-owned functions and the
+  roles themselves. The API runtime never uses the superuser or owner URL.
+  BYPASSRLS bypasses policies but **not** table privileges, so the definer
+  role receives explicit `SELECT` grants (plus the specific `INSERT`/`UPDATE`
+  grants `accept_invitation` needs); the `SECURITY DEFINER` helpers therefore
+  cannot be used to reach tables the definer was not granted.
+
+### ADR-0012: API authentication and tenant resolution
+
+- **Context.** Phase 1 needs Keycloak-issued JWTs verified independently of
+  the dashboard and a single place that decides capabilities.
+- **Decision.**
+  - Verification with `jose`: remote JWKS, exact issuer/audience, signature,
+    `exp`/`nbf`; anything else → 401 with the standard error shape. Realm
+    `dashboard` client gets an audience mapper for `evstation-api`.
+  - Principal resolution and context setting happen in **one transaction**:
+    `BEGIN` → set `app.actor_id` from the verified `sub` → JIT-upsert the
+    `users` row → load memberships/platform-admin/tenant rows (RLS permits
+    self/own-tenant reads) → validate the requested tenant (route param, else
+    `X-Tenant-Id`; never body/query) → set `app.tenant_id` → handlers →
+    `COMMIT`. A suspended tenant yields 403 at this step.
+  - `authorize(user, action, resource)` is the only capability logic
+    (table-driven from PRD §7, site-scope aware). Routes declare their
+    capability in the central registry; the isolation suite fails closed if a
+    tenant-scoped route is missing coverage.
+  - `email_verified: true` is required for invitation acceptance; tokens
+    lacking it are rejected for that action.
+  - Errors: `{ error: { code, message, details? } }`; cross-tenant by-ID
+    access surfaces as 404 (no existence leak), capability failures as 403.
+  - Endpoint surface: `POST/GET /tenants`, `PATCH /tenants/:id`,
+    `POST/GET /tenants/:id/invitations`, `DELETE
+/tenants/:id/invitations/:invitationId`, `POST /invitations/accept`,
+    `GET/PATCH /me`, `GET/POST /sites`, `PATCH /sites/:id`, `GET /users`,
+    `PATCH /users/:id/role`, `GET /health`, `GET /health/ready`, `/docs`,
+    `/openapi.json`.
+- **Consequences.** The dashboard is a BFF: the browser never holds a token
+  and never calls the API directly. Platform-admin access outside a tenant is
+  limited to the tenants surface; acting inside a tenant requires explicit
+  selection and is audited.
+
+### ADR-0013: Dashboard session and OIDC client
+
+- **Context.** The dashboard is a server-rendered operator tool; a stolen
+  encrypted cookie holding a refresh token would be a long-lived credential.
+  PRD Phase 1 requires the shell only.
+- **Decision.**
+  - **Confidential Keycloak client** `dashboard` with PKCE (S256). The client
+    secret is read from env (`OIDC_CLIENT_SECRET`, generated into
+    `infra/compose/.env` on first run and applied to Keycloak by the dev
+    seeding script via the admin API) and is never committed. Fallback to
+    public+PKCE only if the confidential flow proves impractical; the ADR
+    must then record why.
+  - **Server-side session store:** the cookie carries only an opaque random
+    session ID (`HttpOnly`, `SameSite=Lax`, `Secure` in production,
+    `Path=/`). Access/refresh/ID tokens and the active tenant live in the
+    server-side store; logout deletes the session and revokes the refresh
+    token at Keycloak (RFC 7009). The Phase 1 store is in-process behind a
+    `SessionStore` interface (single instance documented; Phase 5 swaps in a
+    shared store). Absolute session lifetime and refresh-token rotation are
+    enforced by the store.
+  - **CSRF:** `SameSite=Lax` plus an Origin/Host check on every state-changing
+    BFF request (POST/PATCH/DELETE), covered by tests.
+  - Tokens never appear in browser JavaScript, `localStorage`,
+    `sessionStorage`, `document.cookie`, or BFF response bodies; Playwright
+    asserts all of these.
+- **Consequences.** Restarting the dashboard invalidates dev sessions
+  (acceptable Phase 1). The API stays bound to localhost and is not exposed
+  to browsers.
+
+### ADR-0014: Invitations and audit log
+
+- **Context.** Phase 1 needs stored invitations with an accept flow, and
+  non-forgeable audit entries for security-relevant actions.
+- **Decision.**
+  - Invitation tokens are 32 random bytes (base64url), shown once; only a
+    SHA-256 hash is stored (`invitations.token_hash`, unique). Tokens are
+    never logged; the dev email stub writes no token (a non-production API
+    response field returns the accept URL for local testing only).
+  - Accept requires the authenticated user's **verified** email to match the
+    invitation (citext), a pending/unexpired invitation, and runs the
+    audited `SECURITY DEFINER` `app.accept_invitation(token_hash, actor,
+email)` owned by `evstation_definer` (atomic: membership insert +
+    `membership_sites` + invitation status + audit).
+  - Invitations require an existing Keycloak account with a verified email;
+    there is no self-registration. Dev seeding creates test accounts.
+  - Audit rows are append-only (no UPDATE/DELETE grants + trigger backstop),
+    stamp `actor_user_id`, active tenant, an `acting_as_platform_admin`
+    marker, action, resource, and redacted metadata. Denied (403) attempts
+    are written from a separate transaction.
+- **Consequences.** Keycloak realm: `verifyEmail: true`; self-service email
+  changes are disabled so the invitee email cannot be re-pointed.
+
+### ADR-0015: Trusted definer context for invitation acceptance
+
+- **Context.** `accept_invitation` is the one write path that runs before the
+  invitee has a membership. If the API sets `app.actor_id` for audit (as it
+  should), the membership guard saw "actor is not a tenant_admin" and raised
+  `role_above_actor`, rejecting a legitimate acceptance.
+- **Decision.** Guard triggers are `SECURITY INVOKER` and skip actor/role
+  checks only when `current_user = 'evstation_definer'`. `evstation_definer`
+  is NOLOGIN, is not granted to `evstation_app` or `evstation_owner`, and is
+  reachable only by executing a `SECURITY DEFINER` function owned by it, so
+  the app role cannot forge the marker via GUCs or `SET ROLE`. The acceptance
+  function itself validates the token hash, verified email, tenant status,
+  inviter authority, role and site scope (ADR-0014 and 0018).
+- **Consequences.** Any future definer-owned write function inherits this
+  trust and must perform its own authorization; guards must not be made
+  definer-owned again without auditing that path. Direct guard tests run as
+  the superuser (RLS bypassed, `current_user` not the definer) so they still
+  exercise the actor checks.
+
+### ADR-0016: Keycloak email changes and local email collisions
+
+- **Context.** The API keys users by Keycloak `sub` but stores a unique,
+  case-insensitive email for invitation matching. If an operator enables
+  self-service email changes, or a person deletes and recreates a Keycloak
+  account with an email still held by an old local row, the next request can
+  try to move an email that already belongs to another `app.users.id`.
+- **Decision.**
+  - Keycloak self-service email editing remains disabled in Phase 1
+    (ADR-0014). The API still treats a verified email change from an
+    administrative Keycloak update as authoritative for that same `sub`:
+    `app.ensure_actor` updates the row on the next request.
+  - The local email column stays unique. If the new email is already attached
+    to a different `sub`, the unique violation is deliberately mapped to
+    `409 EMAIL_IN_USE`; the API does not merge accounts, memberships or audit
+    history automatically.
+  - Resolution is administrative and explicit: an operator must decide which
+    Keycloak identity owns the person, free or change the conflicting email
+    (or deactivate the stale local identity), then let the intended `sub`
+    retry. A recreated Keycloak account is a new identity, not a silent
+    takeover of the old membership set.
+  - Invitation acceptance uses the same verified, case-insensitive email
+    comparison. It never re-points an existing user row by email; a mismatch
+    or collision fails closed.
+- **Consequences.** Email collisions surface as an actionable `409`, not a
+  login loop or cross-account merge. Supporting self-service email changes in
+  a later phase requires an explicit identity-link/merge workflow, not just
+  enabling the Keycloak setting.
+
+### ADR-0017: Invitation mail outbox and post-commit dispatch
+
+- **Context.** Sending invitation mail inside the database transaction can
+  deliver a message for an invitation that the transaction later rolls back.
+  It also loses the message if the process exits immediately after commit.
+- **Decision.**
+  - `app.email_outbox` stores the recipient, fragment accept URL, expiry and
+    dispatch state in the same transaction as the invitation. It is covered by
+    RLS and allows only tenant managers to read/insert; the API role can update
+    only `dispatched_at` and `last_error`.
+  - The mailer runs only after the transaction commits. Successful delivery
+    marks `dispatched_at`; delivery failure leaves the row pending with a
+    generic `last_error` and logs only the outbox ID, never the accept URL.
+  - Dispatch is at-least-once. A crash after delivery but before the mark can
+    resend, which is preferable to losing an invitation in Phase 1.
+- **Consequences.** Pending rows are visible for operational follow-up, and a
+  rollback can never send mail. A later retry worker can consume the pending
+  rows without changing the invitation transaction.
+
+### ADR-0018: Platform-admin impersonation is out of Phase 1 scope
+
+- **Context.** Platform administrators can see cross-tenant metadata for
+  support and operations. Letting them "act as" a tenant user would require
+  a second identity context, explicit consent where required, durable
+  impersonation records, and careful audit attribution.
+- **Decision.** Phase 1 does not implement platform-admin acting-as or any
+  user impersonation. Platform admins use their own identity; tenant-scoped
+  actions still require a membership in the selected tenant. The
+  `acting_as_platform_admin` audit marker is set when a platform admin uses
+  their own identity to act inside a selected tenant; it is not an
+  impersonation marker.
+- **Consequences.** Support cannot reproduce a tenant user's exact
+  permissions through impersonation in Phase 1. Adding it later requires a
+  new ADR, short-lived impersonation grants, clear UI indicators, and audit
+  events that preserve both actor and subject identities.
+
+### ADR-0019: Dashboard client IPs use an explicit trusted-proxy hop count
+
+- **Context.** The dashboard rate-limits login and callback attempts and forwards
+  the end-user IP to the API. Taking the leftmost `X-Forwarded-For` entry lets a
+  client spoof the bucket/forwarded IP. With no trust setting, every direct
+  client shares one bucket, so an unauthenticated flood can lock out everyone.
+  Next.js route handlers do not expose the peer socket address, so the dashboard
+  cannot apply the API's proxy/CIDR source check.
+- **Decision.**
+  - `TRUST_PROXY` on the dashboard is `false` or an integer hop count (`1`–`10`),
+    matching the API's hop-count form. `true` is rejected.
+  - With a hop count, the dashboard selects the `X-Forwarded-For` entry counted
+    from the right (`addresses[length - hops]`), ignoring spoofed entries to its
+    left. Missing, short or non-IP chains fall back to the shared `direct`
+    bucket and are not forwarded to the API.
+  - Production startup fails unless `TRUST_PROXY` is set. The deployment must
+    prevent direct access to the dashboard and the trusted edge proxy must
+    overwrite inbound `X-Forwarded-For`.
+  - Development may keep `TRUST_PROXY=false`; the shared bucket is accepted
+    there.
+- **Consequences.** Spoofed leftmost XFF no longer bypasses or poisons the
+  limit, and clients behind one proxy get separate buckets. The dashboard
+  cannot verify the peer against a CIDR list until it runs behind a custom
+  server or proxy that supplies the peer address; that is deliberately out of
+  Phase 1. The rate limiter remains in-process (see known issues).
+
+## Known issues (Phase 1 close-out)
+
+1. **In-process dashboard state.** OIDC login transactions, sessions and
+   rate-limit buckets live in the dashboard process. Restarting the dashboard
+   ends all sessions, and multiple replicas do not share sessions or limits.
+   Phase 2 needs a shared session/limit store (for example Redis) or sticky
+   single-replica deployment.
+2. **Dashboard trusted proxy.** Only hop-count mode is supported because Next.js
+   does not expose the peer socket. Production requires `TRUST_PROXY` and a
+   proxy-enforced network boundary; there is no CIDR-list source check in the
+   dashboard.
+3. **Platform-admin impersonation.** "Acting as" another user is deferred
+   (ADR-0018). Platform admins act with their own identity and the audit marker
+   `acting_as_platform_admin`; tenant-scoped actions still require membership.
+4. **Invitation email.** Delivery remains a dev outbox/mailer stub until the
+   Phase 5 email integration; pending rows are inspectable and retryable.
+5. **Phase 0 deployment blockers remain.** Profile-0 OCPP and CitrineOS
+   `localDev` HTTP auth are still local-only (ADR-0008); the image EOL watch
+   items remain pinned (ADR-0009).
+6. **No hard delete/purge.** Offboarding is soft-delete; audit history is
+   retained and there is no tenant/user purge endpoint in Phase 1.

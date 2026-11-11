@@ -22,9 +22,15 @@
     "dev:stack": "pnpm dev:bootstrap && node scripts/dev-stack.mjs up",
     "dev:stack:down": "node scripts/dev-stack.mjs down",
     "dev:stack:logs": "node scripts/dev-stack.mjs logs",
-    "prepare": "husky"
+    "prepare": "husky",
+    "db:roles": "node packages/db/scripts/roles.mjs",
+    "db:migrate": "node packages/db/scripts/migrate.mjs",
+    "db:seed": "node packages/db/scripts/seed.mjs",
+    "test:db": "vitest run packages/db/test",
+    "test:ocpp:production-like": "node scripts/ocpp-production-like-test.mjs"
   },
   "devDependencies": {
+    "@types/node": "26.6.5",
     "eslint": "10.14.0",
     "eslint-config-prettier": "10.1.8",
     "husky": "9.1.7",
@@ -38,5 +44,15 @@
   "repository": {
     "type": "git",
     "private": true
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "cpu-features",
+      "protobufjs",
+      "ssh2"
+    ]
   }
 }

@@ -10,6 +10,8 @@ out/
 # Test artifacts
 coverage/
 .venv/
+test-results/
+playwright-report/
 
 # Environment files (committed templates only)
 .env

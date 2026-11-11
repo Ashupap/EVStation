@@ -8,7 +8,7 @@
   "bruteForceProtected": true,
   "loginWithEmailAllowed": true,
   "rememberMe": false,
-  "verifyEmail": false,
+  "verifyEmail": true,
   "accessTokenLifespan": 1800,
   "ssoSessionIdleTimeout": 7200,
   "clients": [
@@ -16,8 +16,8 @@
       "clientId": "dashboard",
       "enabled": true,
       "protocol": "openid-connect",
-      "description": "Operator dashboard (public SPA). Authorization Code + PKCE only. Redirect URIs must match the dashboard dev port (3200; see docs/RUNBOOK.md 'Changing dev ports').",
-      "publicClient": true,
+      "description": "Operator dashboard (confidential BFF). Authorization Code + PKCE only; secret is applied from env by the dev seeder. Redirect URIs must match the dashboard dev port (3200; see docs/RUNBOOK.md).",
+      "publicClient": false,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
@@ -25,11 +25,13 @@
       "frontchannelLogout": true,
       "redirectUris": ["http://localhost:3200/*"],
       "webOrigins": ["http://localhost:3200"],
-      "defaultClientScopes": ["profile", "email", "roles"],
+      "defaultClientScopes": ["basic", "profile", "email", "roles"],
       "optionalClientScopes": [],
       "attributes": {
-        "pkce.code.challenge.method": "S256"
-      }
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3200/login"
+      },
+      "clientAuthenticatorType": "client-secret"
     }
   ],
   "roles": {
@@ -37,7 +39,53 @@
     "client": {}
   },
   "groups": [],
-  "users": [],
+  "users": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "username": "platform@evstation.dev",
+      "email": "platform@evstation.dev",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Platform",
+      "lastName": "Admin"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "username": "admin@acme.example",
+      "email": "admin@acme.example",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Acme",
+      "lastName": "Admin"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "username": "admin@beta.example",
+      "email": "admin@beta.example",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Beta",
+      "lastName": "Admin"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "username": "manager@acme.example",
+      "email": "manager@acme.example",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Acme",
+      "lastName": "Manager"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000005",
+      "username": "viewer@acme.example",
+      "email": "viewer@acme.example",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Acme",
+      "lastName": "Viewer"
+    }
+  ],
   "scopeMappings": [],
   "clientScopeMappings": {}
 }

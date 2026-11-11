@@ -1,0 +1,545 @@
+# Phase 1 RLS policy performance evidence (review HIGH 8 / MEDIUM 12)
+
+Environment: local docker stack (postgis/postgis:16-3.5), tenant `acme`
+(10000000-0000-4000-8000-000000000001), actor acme tenant_admin
+(10000000-0000-4000-8000-000000000011), 100k extra sites, 100k extra users
+and 100k extra memberships in that tenant.
+
+Reproduce:
+  INSERT INTO app.sites (tenant_id, name)
+    SELECT '10000000-0000-4000-8000-000000000001', 'Perf Site ' || g
+    FROM generate_series(1, 100000) g;
+  INSERT INTO app.users (id, email, email_verified, display_name)
+    SELECT ('20000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid,
+           'perf-' || g || '@example.com', true, 'Perf ' || g
+    FROM generate_series(1, 100000) g;
+  INSERT INTO app.memberships (tenant_id, user_id, role)
+    SELECT '10000000-0000-4000-8000-000000000001',
+           ('20000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'viewer'
+    FROM generate_series(1, 100000) g;
+  node packages/db/scripts/explain-policies.mjs plan sites
+  node packages/db/scripts/explain-policies.mjs time sites 1000
+  node packages/db/scripts/explain-policies.mjs full sites
+
+## Before (0013): bare helper calls, evaluated per row
+
+EXPLAIN (VERBOSE, COSTS OFF) SELECT count(*) FROM app.sites;
+
+Aggregate
+  Output: count(*)
+  ->  Index Scan using sites_tenant_idx on app.sites
+        Output: id, tenant_id, name, address, status, created_at, updated_at
+        Index Cond: (sites.tenant_id = app.tenant_id())
+        Filter: (app.can_manage_tenant() OR (app.actor_role() = 'viewer'::text) OR app.has_site(sites.id))
+
+The 100k count did not finish in five minutes and the backend was terminated.
+A 1,000-row subset (LIMIT 1000) still took ~2.9s because every candidate row
+re-entered the helper functions:
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) FROM (SELECT 1 FROM app.sites LIMIT 1000) s;
+
+Aggregate  (actual time=2937.379..2937.381 rows=1 loops=1)
+  Buffers: shared hit=19037
+  ->  Limit  (actual time=4.037..2935.930 rows=1000 loops=1)
+        ->  Index Scan using sites_tenant_idx on sites
+              (actual time=4.035..2934.882 rows=1000 loops=1)
+              Index Cond: (tenant_id = app.tenant_id())
+              Filter: (app.can_manage_tenant() OR (app.actor_role() = 'viewer'::text) OR app.has_site(id))
+Execution Time: 2937.440 ms
+
+## After (0014): helpers hoisted to InitPlans
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM app.sites;  -- 100k rows
+
+Aggregate  (cost=2475.95..2475.96 rows=1 width=8)
+           (actual time=84.858..84.861 rows=1 loops=1)
+  Buffers: shared hit=1652 dirtied=4
+  InitPlan 1 (returns $0)
+    ->  Result  (actual time=5.756..5.757 rows=1 loops=1)
+  InitPlan 2 (returns $1)
+    ->  Result  (actual time=4.218..4.218 rows=1 loops=1)
+  InitPlan 3 (returns $2)
+    ->  Result  (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (never executed)
+  ->  Index Scan using sites_tenant_idx on sites
+        (actual time=10.025..69.220 rows=100002 loops=1)
+        Index Cond: (tenant_id = $0)
+        Filter: ($1 OR ($2 = 'viewer'::text) OR (id = ANY ($3)))
+Execution Time: 85.069 ms
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM app.memberships;  -- 100k rows
+
+Aggregate  (actual time=53.079..53.082 rows=1 loops=1)
+  InitPlan 1..3 (actor_id, tenant_id, can_manage_tenant)
+  ->  Seq Scan on memberships (actual time=4.933..41.396 rows=100003 loops=1)
+        Filter: ((user_id = $0) OR ((tenant_id = $1) AND $2))
+Execution Time: 53.347 ms
+
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM app.users;  -- 100k rows
+
+Aggregate  (actual time=741.265..741.272 rows=1 loops=1)
+  InitPlan 1..2 (actor_id, can_manage_tenant)
+  ->  Seq Scan on users (actual time=648.453..725.902 rows=100003 loops=1)
+        Filter: ((id = $0) OR ($1 AND (hashed SubPlan 12)))
+        SubPlan 12
+          ->  Seq Scan on memberships m (actual time=40.574..87.187 rows=100003 loops=1)
+                Filter: ((tenant_id = $8) AND ((user_id = $9) OR ((tenant_id = $10) AND $11)))
+Execution Time: 1254.017 ms
+
+The users policy is intentionally still an inline per-row membership
+existence check (review MEDIUM 12): it now uses the membership expression
+instead of calling app.is_user_in_tenant() per row, and all stable context
+lookups are InitPlans. Total suite after 0014: 39/39.
+
+
+## Round-2 follow-up: paginated list plans and write timings
+
+Machine: Intel Core i3-4005U @ 1.70GHz (2C/4T), 7.7GiB RAM,
+Linux x86_64 container host; PostgreSQL 16.9 (postgis/postgis:16-3.5);
+Docker server 29.1.3; Node v24.22.2. Same 100k-row `acme` tenant as above.
+
+Commands (page mode orders by the UI's display key and limits to 50;
+`EXPLAIN_ACTOR` selects the seeded actor):
+
+```shell
+for actor in tenant_admin site_manager viewer; do
+  for table in sites memberships users; do
+    EXPLAIN_ACTOR=$actor node packages/db/scripts/explain-policies.mjs page $table 50
+  done
+done
+```
+
+Write paths (all inside one transaction, rolled back):
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS)
+INSERT INTO app.sites (tenant_id, name)
+VALUES ('10000000-0000-4000-8000-000000000001', 'Perf Probe') RETURNING id;
+
+EXPLAIN (ANALYZE, BUFFERS)
+UPDATE app.sites SET name = 'Perf Probe Updated'
+WHERE id = '20000000-0000-4000-8000-000000000001' RETURNING id;
+
+EXPLAIN (ANALYZE, BUFFERS)
+UPDATE app.memberships SET role = 'viewer'
+WHERE user_id = '00000000-0000-4000-8000-000000000005'
+  AND tenant_id = '10000000-0000-4000-8000-000000000001' RETURNING id;
+```
+
+### Paginated reads (tenant_admin, site_manager, viewer)
+
+```
+
+=== page sites (149ms) ===
+Limit  (cost=3247.89..3248.02 rows=50 width=38) (actual time=144.322..144.337 rows=50 loops=1)
+  Buffers: shared hit=1637
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=4.965..4.965 rows=1 loops=1)
+          Buffers: shared hit=282
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=4.523..4.524 rows=1 loops=1)
+          Buffers: shared hit=34
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Sort  (cost=3246.85..3309.67 rows=25129 width=38) (actual time=144.321..144.327 rows=50 loops=1)
+        Sort Key: sites.name, sites.id
+        Sort Method: top-N heapsort  Memory: 28kB
+        Buffers: shared hit=1637
+        ->  Index Scan using sites_tenant_idx on sites  (cost=0.29..2412.08 rows=25129 width=38) (actual time=9.553..62.637 rows=100002 loops=1)
+              Index Cond: (tenant_id = $0)
+              Filter: ($1 OR ($2 = 'viewer'::text) OR (id = ANY ($3)))
+              Buffers: shared hit=1631
+Planning:
+  Buffers: shared hit=129 dirtied=1
+Planning Time: 0.797 ms
+Execution Time: 144.437 ms
+
+=== page memberships (14ms) ===
+Limit  (cost=1.35..10.89 rows=50 width=55) (actual time=9.029..9.055 rows=50 loops=1)
+  Buffers: shared hit=241
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.817..1.818 rows=1 loops=1)
+          Buffers: shared hit=53
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=3.113..3.113 rows=1 loops=1)
+          Buffers: shared hit=147
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.935..3.936 rows=1 loops=1)
+          Buffers: shared hit=34
+  ->  Incremental Sort  (cost=0.57..9540.28 rows=50003 width=55) (actual time=9.027..9.046 rows=50 loops=1)
+        Sort Key: memberships.user_id, memberships.id
+        Presorted Key: memberships.user_id
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+        Buffers: shared hit=241
+        ->  Index Scan using memberships_user_tenant_key on memberships  (cost=0.42..7290.14 rows=50003 width=55) (actual time=1.869..8.952 rows=51 loops=1)
+              Filter: ((user_id = $0) OR ((tenant_id = $1) AND $2))
+              Rows Removed by Filter: 1
+              Buffers: shared hit=238
+Planning:
+  Buffers: shared hit=119
+Planning Time: 0.973 ms
+Execution Time: 9.184 ms
+
+=== page users (1136ms) ===
+Limit  (cost=551598.04..551598.16 rows=50 width=48) (actual time=664.198..664.214 rows=50 loops=1)
+  Buffers: shared hit=2728
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=0.977..0.978 rows=1 loops=1)
+          Buffers: shared hit=53
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=4.067..4.068 rows=1 loops=1)
+          Buffers: shared hit=167
+  ->  Sort  (cost=551597.52..551660.02 rows=25002 width=48) (actual time=262.226..262.233 rows=50 loops=1)
+        Sort Key: users.display_name, users.id
+        Sort Method: top-N heapsort  Memory: 31kB
+        Buffers: shared hit=2728
+        ->  Seq Scan on users  (cost=0.00..550766.97 rows=25002 width=48) (actual time=134.576..191.742 rows=100003 loops=1)
+              Filter: ((id = $0) OR ($1 AND (hashed SubPlan 12)))
+              Rows Removed by Filter: 3
+              Buffers: shared hit=2722
+              SubPlan 12
+                ->  Seq Scan on memberships m  (cost=1.04..2986.13 rows=50003 width=16) (actual time=46.432..75.722 rows=100003 loops=1)
+                      Filter: ((tenant_id = $8) AND ((user_id = $9) OR ((tenant_id = $10) AND $11)))
+                      Rows Removed by Filter: 2
+                      Buffers: shared hit=1268
+                      InitPlan 8 (returns $8)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.779..1.779 rows=1 loops=1)
+                              Buffers: shared hit=7
+                      InitPlan 9 (returns $9)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=0.119..0.119 rows=1 loops=1)
+                      InitPlan 10 (returns $10)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.379..1.380 rows=1 loops=1)
+                              Buffers: shared hit=7
+                      InitPlan 11 (returns $11)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.920..2.921 rows=1 loops=1)
+                              Buffers: shared hit=19
+Planning:
+  Buffers: shared hit=186 dirtied=1
+Planning Time: 1.710 ms
+JIT:
+  Functions: 28
+  Options: Inlining true, Optimization true, Expressions true, Deforming true
+  Timing: Generation 2.006 ms, Inlining 163.714 ms, Optimization 149.812 ms, Emission 133.105 ms, Total 448.637 ms
+Execution Time: 1130.465 ms
+
+=== page sites (71ms) ===
+Limit  (cost=3247.89..3248.02 rows=50 width=38) (actual time=66.447..66.452 rows=1 loops=1)
+  Buffers: shared hit=1788 dirtied=1
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=4.352..4.353 rows=1 loops=1)
+          Buffers: shared hit=282
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=4.277..4.278 rows=1 loops=1)
+          Buffers: shared hit=34
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=2.520..2.520 rows=1 loops=1)
+          Buffers: shared hit=18
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=5.678..5.679 rows=1 loops=1)
+          Buffers: shared hit=133 dirtied=1
+  ->  Sort  (cost=3246.85..3309.67 rows=25129 width=38) (actual time=66.445..66.446 rows=1 loops=1)
+        Sort Key: sites.name, sites.id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=1788 dirtied=1
+        ->  Index Scan using sites_tenant_idx on sites  (cost=0.29..2412.08 rows=25129 width=38) (actual time=16.896..66.389 rows=1 loops=1)
+              Index Cond: (tenant_id = $0)
+              Filter: ($1 OR ($2 = 'viewer'::text) OR (id = ANY ($3)))
+              Rows Removed by Filter: 100001
+              Buffers: shared hit=1782 dirtied=1
+Planning:
+  Buffers: shared hit=129
+Planning Time: 0.699 ms
+Execution Time: 66.547 ms
+
+=== page memberships (49ms) ===
+Limit  (cost=1.35..10.89 rows=50 width=55) (actual time=44.089..44.094 rows=1 loops=1)
+  Buffers: shared hit=2078
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.535..1.536 rows=1 loops=1)
+          Buffers: shared hit=53
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=2.210..2.211 rows=1 loops=1)
+          Buffers: shared hit=147
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.960..2.961 rows=1 loops=1)
+          Buffers: shared hit=34
+  ->  Incremental Sort  (cost=0.57..9540.28 rows=50003 width=55) (actual time=44.087..44.089 rows=1 loops=1)
+        Sort Key: memberships.user_id, memberships.id
+        Presorted Key: memberships.user_id
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB
+        Buffers: shared hit=2078
+        ->  Index Scan using memberships_user_tenant_key on memberships  (cost=0.42..7290.14 rows=50003 width=55) (actual time=6.758..44.032 rows=1 loops=1)
+              Filter: ((user_id = $0) OR ((tenant_id = $1) AND $2))
+              Rows Removed by Filter: 100004
+              Buffers: shared hit=2075
+Planning:
+  Buffers: shared hit=119
+Planning Time: 0.765 ms
+Execution Time: 44.181 ms
+
+=== page users (394ms) ===
+Limit  (cost=551598.04..551598.16 rows=50 width=48) (actual time=348.842..348.847 rows=1 loops=1)
+  Buffers: shared hit=1460
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.407..1.408 rows=1 loops=1)
+          Buffers: shared hit=53
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=4.580..4.581 rows=1 loops=1)
+          Buffers: shared hit=167
+  ->  Sort  (cost=551597.52..551660.02 rows=25002 width=48) (actual time=19.790..19.793 rows=1 loops=1)
+        Sort Key: users.display_name, users.id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=1460
+        ->  Seq Scan on users  (cost=0.00..550766.97 rows=25002 width=48) (actual time=6.077..19.675 rows=1 loops=1)
+              Filter: ((id = $0) OR ($1 AND (hashed SubPlan 12)))
+              Rows Removed by Filter: 100005
+              Buffers: shared hit=1454
+              SubPlan 12
+                ->  Seq Scan on memberships m  (cost=1.04..2986.13 rows=50003 width=16) (never executed)
+                      Filter: ((tenant_id = $8) AND ((user_id = $9) OR ((tenant_id = $10) AND $11)))
+                      InitPlan 8 (returns $8)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (never executed)
+                      InitPlan 9 (returns $9)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (never executed)
+                      InitPlan 10 (returns $10)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (never executed)
+                      InitPlan 11 (returns $11)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=1) (never executed)
+Planning:
+  Buffers: shared hit=186
+Planning Time: 1.355 ms
+JIT:
+  Functions: 26
+  Options: Inlining true, Optimization true, Expressions true, Deforming true
+  Timing: Generation 1.656 ms, Inlining 150.720 ms, Optimization 92.938 ms, Emission 85.450 ms, Total 330.764 ms
+Execution Time: 388.768 ms
+
+=== page sites (144ms) ===
+Limit  (cost=3247.89..3248.02 rows=50 width=38) (actual time=140.783..140.798 rows=50 loops=1)
+  Buffers: shared hit=1655
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=4.145..4.146 rows=1 loops=1)
+          Buffers: shared hit=282
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.891..2.892 rows=1 loops=1)
+          Buffers: shared hit=34
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=2.363..2.364 rows=1 loops=1)
+          Buffers: shared hit=18
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Sort  (cost=3246.85..3309.67 rows=25129 width=38) (actual time=140.782..140.787 rows=50 loops=1)
+        Sort Key: sites.name, sites.id
+        Sort Method: top-N heapsort  Memory: 28kB
+        Buffers: shared hit=1655
+        ->  Index Scan using sites_tenant_idx on sites  (cost=0.29..2412.08 rows=25129 width=38) (actual time=9.444..64.170 rows=100002 loops=1)
+              Index Cond: (tenant_id = $0)
+              Filter: ($1 OR ($2 = 'viewer'::text) OR (id = ANY ($3)))
+              Buffers: shared hit=1649
+Planning:
+  Buffers: shared hit=129
+Planning Time: 0.726 ms
+Execution Time: 140.893 ms
+
+=== page memberships (41ms) ===
+Limit  (cost=1.35..10.89 rows=50 width=55) (actual time=37.930..37.934 rows=1 loops=1)
+  Buffers: shared hit=2078
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.418..1.418 rows=1 loops=1)
+          Buffers: shared hit=53
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=2.213..2.214 rows=1 loops=1)
+          Buffers: shared hit=147
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.822..2.822 rows=1 loops=1)
+          Buffers: shared hit=34
+  ->  Incremental Sort  (cost=0.57..9540.28 rows=50003 width=55) (actual time=37.928..37.929 rows=1 loops=1)
+        Sort Key: memberships.user_id, memberships.id
+        Presorted Key: memberships.user_id
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB
+        Buffers: shared hit=2078
+        ->  Index Scan using memberships_user_tenant_key on memberships  (cost=0.42..7290.14 rows=50003 width=55) (actual time=6.504..37.876 rows=1 loops=1)
+              Filter: ((user_id = $0) OR ((tenant_id = $1) AND $2))
+              Rows Removed by Filter: 100004
+              Buffers: shared hit=2075
+Planning:
+  Buffers: shared hit=119
+Planning Time: 0.822 ms
+Execution Time: 38.019 ms
+
+=== page users (378ms) ===
+Limit  (cost=551598.04..551598.16 rows=50 width=48) (actual time=338.402..338.408 rows=1 loops=1)
+  Buffers: shared hit=1460
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=0.942..0.942 rows=1 loops=1)
+          Buffers: shared hit=53
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.842..3.842 rows=1 loops=1)
+          Buffers: shared hit=167
+  ->  Sort  (cost=551597.52..551660.02 rows=25002 width=48) (actual time=17.462..17.465 rows=1 loops=1)
+        Sort Key: users.display_name, users.id
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=1460
+        ->  Seq Scan on users  (cost=0.00..550766.97 rows=25002 width=48) (actual time=4.842..17.388 rows=1 loops=1)
+              Filter: ((id = $0) OR ($1 AND (hashed SubPlan 12)))
+              Rows Removed by Filter: 100005
+              Buffers: shared hit=1454
+              SubPlan 12
+                ->  Seq Scan on memberships m  (cost=1.04..2986.13 rows=50003 width=16) (never executed)
+                      Filter: ((tenant_id = $8) AND ((user_id = $9) OR ((tenant_id = $10) AND $11)))
+                      InitPlan 8 (returns $8)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (never executed)
+                      InitPlan 9 (returns $9)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (never executed)
+                      InitPlan 10 (returns $10)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=16) (never executed)
+                      InitPlan 11 (returns $11)
+                        ->  Result  (cost=0.00..0.26 rows=1 width=1) (never executed)
+Planning:
+  Buffers: shared hit=186
+Planning Time: 1.188 ms
+JIT:
+  Functions: 26
+  Options: Inlining true, Optimization true, Expressions true, Deforming true
+  Timing: Generation 1.956 ms, Inlining 150.151 ms, Optimization 86.020 ms, Emission 84.803 ms, Total 322.931 ms
+Execution Time: 374.082 ms
+```
+
+### Writes under policies and guards
+
+```
+
+=== INSERT site (tenant_admin) ===
+Insert on sites  (cost=1.56..1.58 rows=1 width=144) (actual time=16.205..16.211 rows=1 loops=1)
+  Buffers: shared hit=451 dirtied=5
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=5.991..5.992 rows=1 loops=1)
+          Buffers: shared hit=320
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=4.298..4.299 rows=1 loops=1)
+          Buffers: shared hit=34
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.541..1.542 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.669..3.670 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 5 (returns $4)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 6 (returns $5)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Result  (cost=0.00..0.02 rows=1 width=144) (actual time=0.028..0.029 rows=1 loops=1)
+Planning:
+  Buffers: shared hit=33
+Planning Time: 0.222 ms
+Trigger for constraint sites_tenant_id_fkey: time=0.413 calls=1
+Execution Time: 16.760 ms
+
+=== UPDATE site (tenant_admin) ===
+Update on sites  (cost=4.06..12.10 rows=1 width=38) (actual time=21.476..21.486 rows=1 loops=1)
+  Buffers: shared hit=145 dirtied=4
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.446..1.446 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.775..3.776 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.361..1.362 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 5 (returns $4)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.514..3.515 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 6 (returns $5)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 7 (returns $6)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 8 (returns $7)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.863..1.863 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 9 (returns $8)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.885..3.885 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 10 (returns $9)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 11 (returns $10)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.388..1.389 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 12 (returns $11)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.696..3.697 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 13 (returns $12)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 14 (returns $13)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Result  (cost=0.42..8.46 rows=1 width=38) (actual time=10.887..10.890 rows=1 loops=1)
+        One-Time Filter: ($7 = $10)
+        Buffers: shared hit=56
+        ->  Index Scan using sites_id_tenant_key on sites  (cost=0.42..8.46 rows=1 width=6) (actual time=7.626..7.628 rows=1 loops=1)
+              Index Cond: ((id = '20000000-0000-4000-8000-000000000001'::uuid) AND (tenant_id = $10))
+              Filter: (($8 OR (id = ANY ($9))) AND ($11 OR ($12 = 'viewer'::text) OR (id = ANY ($13))))
+              Buffers: shared hit=42
+Planning:
+  Buffers: shared hit=66
+Planning Time: 0.866 ms
+Trigger sites_touch_updated_at: time=0.224 calls=1
+Execution Time: 21.770 ms
+
+=== UPDATE membership role (tenant_admin, guard) ===
+Update on memberships  (cost=3.02..11.04 rows=1 width=38) (actual time=35.670..35.682 rows=1 loops=1)
+  Buffers: shared hit=286 read=1 dirtied=7
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.479..1.480 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=4.093..4.094 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=0.072..0.073 rows=1 loops=1)
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.532..1.533 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 5 (returns $4)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.771..2.772 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 6 (returns $5)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.103..1.104 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 7 (returns $6)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.011..3.012 rows=1 loops=1)
+          Buffers: shared hit=19
+  InitPlan 8 (returns $7)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=0.097..0.098 rows=1 loops=1)
+  InitPlan 9 (returns $8)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.329..1.329 rows=1 loops=1)
+          Buffers: shared hit=7
+  InitPlan 10 (returns $9)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.110..3.111 rows=1 loops=1)
+          Buffers: shared hit=19
+  ->  Result  (cost=0.42..8.44 rows=1 width=38) (actual time=8.678..8.681 rows=1 loops=1)
+        One-Time Filter: ($5 = '10000000-0000-4000-8000-000000000001'::uuid)
+        Buffers: shared hit=56
+        ->  Index Scan using memberships_user_tenant_key on memberships  (cost=0.42..8.44 rows=1 width=6) (actual time=7.570..7.572 rows=1 loops=1)
+              Index Cond: ((user_id = '00000000-0000-4000-8000-000000000005'::uuid) AND (tenant_id = '10000000-0000-4000-8000-000000000001'::uuid))
+              Filter: ($6 AND ((user_id = $7) OR ((tenant_id = $8) AND $9)))
+              Buffers: shared hit=49
+Planning Time: 0.236 ms
+Trigger memberships_guard: time=16.502 calls=1
+Trigger memberships_touch_updated_at: time=0.109 calls=1
+Execution Time: 35.818 ms
+```
+
+Notes: `sites` has no `(tenant_id, name)` index, so the paginated site list
+still top-N sorts the tenant's 100k rows (~145ms); adding that index is a
+Phase 2 optimization if the dashboard needs large page counts. `users` pages
+for managers remain ~1.1s at 100k because the policy's membership probe is a
+hashed SubPlan; the viewer path never executes it. The membership-role update
+spends ~16ms in `guard_membership` (authority checks + last-admin advisory
+lock/count), which is the expected write-path cost and is unrelated to table
+size.

@@ -1,0 +1,7 @@
+# Phase 1 acceptance overlay: refuse unregistered OCPP stations.
+# Use with docker-compose.yml; the smoke workflow applies it, runs the
+# unknown/commissioned station assertions, then restores the base stack.
+services:
+  citrine:
+    volumes:
+      - ./websocket-servers.production-like.json:/usr/local/apps/citrineos/apps/ocpp-server/dist/assets/websocket-servers.json:ro
