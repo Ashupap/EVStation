@@ -54,6 +54,7 @@ Useful flags (see also `--help`):
 --url ws://localhost:8081   # CSMS base URL                         [dev default]
 --password secret123        # Basic auth (profile 1 servers: port 8082)
 --no-session                # boot + heartbeats only, stay idle
+--exit-after-boot           # exit 0 after BootNotification is Accepted
 --exit-after-session        # exit 0 after one session (CI mode)
 ```
 

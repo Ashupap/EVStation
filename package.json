@@ -26,7 +26,8 @@
     "db:roles": "node packages/db/scripts/roles.mjs",
     "db:migrate": "node packages/db/scripts/migrate.mjs",
     "db:seed": "node packages/db/scripts/seed.mjs",
-    "test:db": "vitest run packages/db/test"
+    "test:db": "vitest run packages/db/test",
+    "test:ocpp:production-like": "node scripts/ocpp-production-like-test.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
