@@ -12,12 +12,48 @@ const base = {
 } as NodeJS.ProcessEnv;
 
 describe('dashboard configuration', () => {
-  it('derives the login cookie and default absolute lifetime', () => {
+  it('derives the login cookie and defaults', () => {
     const config = loadDashboardConfig(base);
     expect(config.sessionCookieName).toBe('evstation_session');
     expect(config.loginCookieName).toBe('evstation_session_login');
     expect(config.sessionAbsoluteTtlSeconds).toBe(28800);
+    expect(config.sessionIdleTtlSeconds).toBe(1800);
+    expect(config.trustProxy).toBe(false);
     expect(config.e2eMode).toBe(false);
+  });
+
+  it('prefixes cookies with __Host- only when secure', () => {
+    const config = loadDashboardConfig({
+      ...base,
+      NODE_ENV: 'production',
+      API_BASE_URL: 'https://api.example.com',
+      OIDC_ISSUER: 'https://id.example.com/realms/evstation',
+      OIDC_REDIRECT_URI: 'https://console.example.com/auth/callback',
+      COOKIE_SECURE: 'true',
+    });
+    expect(config.sessionCookieName).toBe('__Host-evstation_session');
+    expect(config.loginCookieName).toBe('__Host-evstation_session_login');
+  });
+
+  it('does not double-prefix an explicit __Host- cookie name', () => {
+    const config = loadDashboardConfig({
+      ...base,
+      NODE_ENV: 'production',
+      API_BASE_URL: 'https://api.example.com',
+      OIDC_ISSUER: 'https://id.example.com/realms/evstation',
+      OIDC_REDIRECT_URI: 'https://console.example.com/auth/callback',
+      COOKIE_SECURE: 'true',
+      SESSION_COOKIE_NAME: '__Host-evstation_session',
+    });
+    expect(config.sessionCookieName).toBe('__Host-evstation_session');
+  });
+
+  it('validates idle timeout and trust proxy', () => {
+    expect(loadDashboardConfig({ ...base, TRUST_PROXY: 'true' }).trustProxy).toBe(true);
+    expect(() => loadDashboardConfig({ ...base, TRUST_PROXY: 'maybe' })).toThrow(/TRUST_PROXY/u);
+    expect(() => loadDashboardConfig({ ...base, SESSION_IDLE_TTL_SECONDS: '59' })).toThrow(
+      /SESSION_IDLE_TTL_SECONDS/u,
+    );
   });
 
   it('rejects insecure production redirects and cookies', () => {

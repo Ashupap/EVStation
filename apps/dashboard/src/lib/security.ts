@@ -2,14 +2,17 @@ export interface SecurityHeaderOptions {
   nonce: string;
   nodeEnv: 'development' | 'test' | 'production';
   cookieSecure: boolean;
+  formActionOrigins?: string[];
 }
 
 export function buildContentSecurityPolicy({
   nonce,
   development,
+  formActionOrigins = [],
 }: {
   nonce: string;
   development: boolean;
+  formActionOrigins?: string[];
 }): string {
   const scriptEval = development ? " 'unsafe-eval'" : '';
   const connect = development ? "connect-src 'self' ws: http:;" : "connect-src 'self';";
@@ -24,7 +27,7 @@ export function buildContentSecurityPolicy({
     connect,
     "object-src 'none';",
     "base-uri 'self';",
-    "form-action 'self';",
+    `form-action 'self'${formActionOrigins.length ? ` ${formActionOrigins.join(' ')}` : ''};`,
     "frame-ancestors 'none';",
     `frame-src 'none';`,
     `worker-src 'self' blob:;${upgrade}`,
@@ -39,7 +42,11 @@ export function buildSecurityHeaders(options: SecurityHeaderOptions): Headers {
   const development = options.nodeEnv === 'development';
   headers.set(
     'content-security-policy',
-    buildContentSecurityPolicy({ nonce: options.nonce, development }),
+    buildContentSecurityPolicy({
+      nonce: options.nonce,
+      development,
+      formActionOrigins: options.formActionOrigins,
+    }),
   );
   headers.set('x-content-type-options', 'nosniff');
   headers.set('x-frame-options', 'DENY');

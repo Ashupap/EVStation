@@ -9,6 +9,7 @@ export function proxy(request: NextRequest) {
     nonce,
     nodeEnv: config.nodeEnv,
     cookieSecure: config.cookieSecure,
+    formActionOrigins: [new URL(config.oidcIssuer).origin],
   });
 
   const requestHeaders = new Headers(request.headers);

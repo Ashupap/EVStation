@@ -8,7 +8,9 @@ export interface DashboardConfig {
   sessionCookieName: string;
   loginCookieName: string;
   sessionAbsoluteTtlSeconds: number;
+  sessionIdleTtlSeconds: number;
   cookieSecure: boolean;
+  trustProxy: boolean;
   e2eMode: boolean;
 }
 
@@ -52,10 +54,22 @@ export function loadDashboardConfig(env: NodeJS.ProcessEnv = process.env): Dashb
     );
   }
 
-  const sessionCookieName = env.SESSION_COOKIE_NAME?.trim() || 'evstation_session';
-  if (!/^[A-Za-z0-9_-]+$/u.test(sessionCookieName)) {
+  const idleTtl = Number(env.SESSION_IDLE_TTL_SECONDS ?? '1800');
+  if (!Number.isSafeInteger(idleTtl) || idleTtl < 60) {
+    throw new Error(
+      'invalid dashboard configuration: SESSION_IDLE_TTL_SECONDS must be at least 60',
+    );
+  }
+
+  const baseCookieName = (env.SESSION_COOKIE_NAME?.trim() || 'evstation_session').replace(
+    /^__Host-/u,
+    '',
+  );
+  if (!/^[A-Za-z0-9_-]+$/u.test(baseCookieName)) {
     throw new Error('invalid dashboard configuration: SESSION_COOKIE_NAME is invalid');
   }
+  const cookieSecure = bool(env, 'COOKIE_SECURE', nodeEnv === 'production');
+  const sessionCookieName = cookieSecure ? `__Host-${baseCookieName}` : baseCookieName;
 
   const config: DashboardConfig = {
     nodeEnv,
@@ -67,7 +81,9 @@ export function loadDashboardConfig(env: NodeJS.ProcessEnv = process.env): Dashb
     sessionCookieName,
     loginCookieName: `${sessionCookieName}_login`,
     sessionAbsoluteTtlSeconds: absoluteTtl,
-    cookieSecure: bool(env, 'COOKIE_SECURE', nodeEnv === 'production'),
+    sessionIdleTtlSeconds: idleTtl,
+    cookieSecure,
+    trustProxy: bool(env, 'TRUST_PROXY', false),
     e2eMode: bool(env, 'DASHBOARD_E2E_MODE', false),
   };
 

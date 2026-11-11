@@ -5,11 +5,21 @@ import { safeReturnTo } from '@/lib/csrf';
 import { getLoginStore } from '@/lib/login-store';
 import { exchangeCode } from '@/lib/oidc';
 import { getSessionStore } from '@/lib/session-store';
+import { getCallbackRateLimiter } from '@/lib/rate-limit';
+import { clientIp } from '@/lib/request-ip';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   const config = loadDashboardConfig();
+  const limit = getCallbackRateLimiter().check(clientIp(request.headers, config));
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: { code: 'RATE_LIMITED', message: 'too many callback attempts' } },
+      { status: 429, headers: { 'retry-after': String(limit.retryAfterSeconds) } },
+    );
+  }
+
   const transactionId = request.cookies.get(config.loginCookieName)?.value;
   const transaction = transactionId ? getLoginStore().consume(transactionId) : undefined;
 

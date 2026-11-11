@@ -47,6 +47,30 @@ describe('in-memory session store', () => {
     expect(store.get(id)).toBeUndefined();
   });
 
+  it('enforces the idle timeout', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-11T00:00:00Z'));
+    const store = new InMemorySessionStore({ idleTtlMs: 1_000 });
+    const id = store.create({
+      accessToken: 'access-token',
+      accessExpiresAt: Date.now() + 10_000,
+      absoluteExpiresAt: Date.now() + 10_000,
+    });
+    vi.advanceTimersByTime(900);
+    expect(store.get(id)).toBeDefined();
+    vi.advanceTimersByTime(1_100);
+    expect(store.get(id)).toBeUndefined();
+  });
+
+  it('caps the number of stored sessions', () => {
+    const store = new InMemorySessionStore({ maxEntries: 2 });
+    const first = store.create(record());
+    store.create(record());
+    store.create(record());
+    expect(store.get(first)).toBeUndefined();
+    expect(store.size).toBe(2);
+  });
+
   it('does not return references that mutate stored tokens', () => {
     const store = new InMemorySessionStore();
     const id = store.create(record());
@@ -83,5 +107,31 @@ describe('in-memory login store', () => {
     });
     vi.advanceTimersByTime(1_001);
     expect(store.consume(id)).toBeUndefined();
+  });
+
+  it('caps the number of pending login transactions', () => {
+    const store = new InMemoryLoginStore({ maxEntries: 2 });
+    const first = store.create({
+      state: 'a',
+      nonce: 'n',
+      codeVerifier: 'v',
+      returnTo: '/app',
+      expiresAt: Date.now() + 60_000,
+    });
+    store.create({
+      state: 'b',
+      nonce: 'n',
+      codeVerifier: 'v',
+      returnTo: '/app',
+      expiresAt: Date.now() + 60_000,
+    });
+    store.create({
+      state: 'c',
+      nonce: 'n',
+      codeVerifier: 'v',
+      returnTo: '/app',
+      expiresAt: Date.now() + 60_000,
+    });
+    expect(store.consume(first)).toBeUndefined();
   });
 });

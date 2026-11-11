@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ZodType } from 'zod';
 import { loadDashboardConfig } from './config';
+import { endUserIp } from './request-ip';
 import type { SessionRecord } from './session-store';
 
 export class ApiError extends Error {
@@ -10,11 +11,6 @@ export class ApiError extends Error {
   ) {
     super(message);
   }
-}
-
-function endUserIp(headers: Headers): string | undefined {
-  const forwarded = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return forwarded || headers.get('x-real-ip')?.trim() || undefined;
 }
 
 export async function apiFetch(
@@ -29,7 +25,7 @@ export async function apiFetch(
   headers.set('accept', 'application/json');
   headers.set('x-request-id', incomingHeaders?.get('x-request-id') || randomUUID());
   if (session.tenantId) headers.set('x-tenant-id', session.tenantId);
-  const ip = incomingHeaders ? endUserIp(incomingHeaders) : undefined;
+  const ip = incomingHeaders ? endUserIp(incomingHeaders, config) : undefined;
   if (ip) headers.set('x-forwarded-for', ip);
   if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
 

@@ -10,7 +10,9 @@ const dashboardEnv = {
   OIDC_REDIRECT_URI: 'http://127.0.0.1:3200/auth/callback',
   SESSION_COOKIE_NAME: 'evstation_session',
   SESSION_ABSOLUTE_TTL_SECONDS: '28800',
+  SESSION_IDLE_TTL_SECONDS: '1800',
   COOKIE_SECURE: 'false',
+  TRUST_PROXY: 'true',
 };
 
 export default defineConfig({

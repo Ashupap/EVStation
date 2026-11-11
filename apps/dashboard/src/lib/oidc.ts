@@ -1,5 +1,5 @@
 import * as client from 'openid-client';
-import { loadDashboardConfig } from './config';
+import { dashboardUrl, loadDashboardConfig } from './config';
 
 let cachedConfig: client.Configuration | undefined;
 
@@ -61,5 +61,13 @@ export async function refreshTokens(
 export async function revokeToken(token: string): Promise<void> {
   await client.tokenRevocation(await getOidcConfig(), token, {
     token_type_hint: 'refresh_token',
+  });
+}
+
+export async function buildLogoutUrl(idToken: string): Promise<URL> {
+  const config = loadDashboardConfig();
+  return client.buildEndSessionUrl(await getOidcConfig(), {
+    id_token_hint: idToken,
+    post_logout_redirect_uri: dashboardUrl(config, '/login').toString(),
   });
 }

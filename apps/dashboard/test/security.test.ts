@@ -40,4 +40,13 @@ describe('security response headers', () => {
     expect(csp).not.toContain("'unsafe-inline'");
     expect(csp).toContain("script-src 'self' 'nonce-abc' 'strict-dynamic'");
   });
+
+  it('permits form redirects to the configured identity provider', () => {
+    const csp = buildContentSecurityPolicy({
+      nonce: 'abc',
+      development: false,
+      formActionOrigins: ['https://id.example'],
+    });
+    expect(csp).toContain("form-action 'self' https://id.example;");
+  });
 });

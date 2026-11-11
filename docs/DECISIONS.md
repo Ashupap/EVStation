@@ -584,3 +584,19 @@ email)` owned by `evstation_definer` (atomic: membership insert +
 - **Consequences.** Pending rows are visible for operational follow-up, and a
   rollback can never send mail. A later retry worker can consume the pending
   rows without changing the invitation transaction.
+
+### ADR-0018: Platform-admin impersonation is out of Phase 1 scope
+
+- **Context.** Platform administrators can see cross-tenant metadata for
+  support and operations. Letting them "act as" a tenant user would require
+  a second identity context, explicit consent where required, durable
+  impersonation records, and careful audit attribution.
+- **Decision.** Phase 1 does not implement platform-admin acting-as or any
+  user impersonation. Platform admins use their own identity; tenant-scoped
+  actions still require a membership in the selected tenant. The
+  `acting_as_platform_admin` audit marker remains for future compatibility
+  but no Phase 1 route sets it.
+- **Consequences.** Support cannot reproduce a tenant user's exact
+  permissions through impersonation in Phase 1. Adding it later requires a
+  new ADR, short-lived impersonation grants, clear UI indicators, and audit
+  events that preserve both actor and subject identities.

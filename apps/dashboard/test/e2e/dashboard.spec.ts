@@ -103,7 +103,9 @@ test('sets hardened security headers with a nonce on page responses', async ({ p
   expect(headers['permissions-policy']).toContain('camera=()');
 
   await expect(page.locator('script[nonce]').first()).toHaveCount(1);
-  const nonce = await page.evaluate(() => document.querySelector('script[nonce]')?.nonce ?? '');
+  const nonce = await page.evaluate(
+    () => (document.querySelector('script[nonce]') as HTMLScriptElement | null)?.nonce ?? '',
+  );
   expect(nonce).toBeTruthy();
   expect(csp).toContain(`'nonce-${nonce}'`);
 });
@@ -186,6 +188,16 @@ test('blocks an unverified email before the console', async ({ page }) => {
   await page.goto('/auth/test-login?persona=unverified');
   await expect(page).toHaveURL(/\/unverified-email$/u);
   await expect(page.getByText('Verify your email address')).toBeVisible();
+});
+
+test('rate-limits a flood of login attempts from one proxy IP', async ({ page }) => {
+  const headers = { 'x-forwarded-for': '198.51.100.77' };
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 61; attempt += 1) {
+    const response = await page.context().request.get('/auth/login', { headers });
+    lastStatus = response.status();
+  }
+  expect(lastStatus).toBe(429);
 });
 
 test('keeps the active tenant in the server-side session', async ({ page }) => {
