@@ -1,5 +1,7 @@
 # Phase 2b review map
 
+Implementation commit: `1b7ffcd7336001fbc8846166d5b48d78dd479aaf`
+
 Status: implementation + review fixes complete locally; not yet merged.
 
 ## Evidence
