@@ -649,3 +649,107 @@ email)` owned by `evstation_definer` (atomic: membership insert +
    items remain pinned (ADR-0009).
 6. **No hard delete/purge.** Offboarding is soft-delete; audit history is
    retained and there is no tenant/user purge endpoint in Phase 1.
+
+## Phase 2 — station registry and CitrineOS integration
+
+### ADR-0020: Phase 2 supports OCPP 1.6 only
+
+- **Context.** Phase 2 must ingest real connector/session events while CitrineOS
+  v2.1.0 supports OCPP 1.6, 2.0.1 and 2.1. The simulator and existing smoke
+  workflow exercise OCPP 1.6.
+- **Decision.** Station registration accepts only `ocpp_version='ocpp1.6'`.
+  The database check, API schema and adapter reject other versions with
+  `UNSUPPORTED_OCPP_VERSION`. Event ingestion rejects/flags other protocols in
+  a later PR.
+- **Consequences.** OCPP 2.x/2.1 stations remain future work. The adapter
+  interface can grow a protocol-specific implementation without changing the
+  registry.
+
+### ADR-0021: Station identity, org/site codes and runtime split
+
+- **Context.** `station_ref` is globally unique and immutable, and the ORG/SITE
+  segments must remain tied to tenant/site records. Runtime heartbeat state
+  changes frequently and must not churn registration data.
+- **Decision.** `tenants.org_code` is unique and immutable; `sites.site_code` is
+  unique per tenant and immutable. `station_ref` is
+  `<ORG>-<SITE>-<NNN>` (max 20); the ORG segment must equal `tenants.org_code`
+  and the SITE segment must equal `sites.site_code`. A database trigger enforces
+  format/binding and immutability of `station_ref`, `tenant_id`, `site_id`,
+  `org_code`, and `site_code`. Registration/config lives in `app.stations`;
+  connection state/heartbeats live in `app.station_runtime_state`, created by a
+  trigger in the same transaction as the station.
+- **Consequences.** Relocating a station or renaming codes requires a future
+  audited operation, not an ordinary PATCH. Site managers cannot mutate the
+  identity fields. Phase 2a station creation rejects missing codes; the Phase 1
+  tenant/site creation APIs still need an explicit `org_code`/`site_code` field
+  in follow-up API hardening. The dev seed sets both.
+
+### ADR-0022: Credential rotation uses a two-step WriteOnly workaround
+
+- **Context.** CitrineOS v2.1.0 stores `BasicAuthPassword` in
+  `VariableAttributes.value` as a WriteOnly variable. Its
+  `writeReportedAttribute` deliberately preserves an existing WriteOnly value
+  (B08.FR.03), so a single WriteOnly `provisionStationVariables` call does not
+  change an existing password.
+- **Decision.** Credential rotation calls CitrineOS
+  `PUT /commands/provisionStationVariables` twice with the same new value:
+  first `mutability=ReadWrite`, then `mutability=WriteOnly`. The API retries
+  step 2 a few times; if it still fails, it records
+  `credentials_state=rotation_incomplete`, alerts, returns no success, and the
+  operator starts again with a fresh password. Rotation is tenant-admin (or
+  platform-admin acting) only, audited, rate-limited, and `no-store`; passwords
+  are never logged or written to audit details.
+- **Known issue.** Rotation does not terminate a live OCPP connection; the
+  charger keeps the old password until it reconnects/updates. Disconnect-on-rotate
+  is deliberately not implemented in Phase 2.
+- **Dependencies/files relied on.** CitrineOS v2.1.0
+  `dist/src/apis/commands/provision-station-variables-endpoint.js`,
+  `dist/src/apis/commands/set-station-password-endpoint.js`, and
+  `dist/src/repositories/drizzle/variable-attribute.js` at pin
+  `4fd7599b91c2fb6e6065e7c9b94be69880cced27`.
+- **Password policy.** Default 32 alphanumeric characters. Symbols from the
+  CitrineOS/OCPP set require a per-vendor override after hardware testing because
+  URL/credential UIs break on `@ : | + =`.
+
+### ADR-0023: Bounded Hasura provisioning exception for CitrineOS entities
+
+- **Context.** CitrineOS v2.1.0 has no REST data API for creating Locations,
+  ChargingStations, EVSEs or Connectors. Its Swagger at `/docs/json` exposes
+  commands, `/dev`, `/ocpprouter`, `/permissions` and OCPP command surfaces
+  only; the Operator UI performs entity CRUD through Hasura GraphQL.
+- **Decision (approved exception).** The adapter may provision only
+  `Locations`, `ChargingStations`, `Evses` and `Connectors` through a Hasura
+  JWT role (`csms-provisioner`/`evstation_adapter`), never the Hasura admin
+  secret. The committed overlay
+  `infra/compose/hasura/evstation-adapter-metadata.json` grants column-level
+  insert/update, pins `tenantId` to the service tenant, forces
+  `capabilities.evstation_managed=true` on station insert, excludes
+  `capabilities` from updates, requires the station marker through
+  `ChargingStation` relationships for Evse/Connector writes, and grants no
+  delete or `VariableAttributes` access. `csms-reader` has a separate read-only
+  Hasura role. Existing unowned stations are never adopted: the adapter
+  conflicts on an existing `ocppConnectionName` without the managed marker and
+  relies on the CitrineOS `(ocppConnectionName, tenantId)` unique constraint.
+- **Consequences / sunset.** This exception is bounded to Phase 2 provisioning.
+  The sunset plan is to replace it with a supported CitrineOS REST data API
+  (upstream contribution or later release); the Hasura write path and role are
+  then removed. The adapter never writes CitrineOS databases directly.
+- **Files relied on.** CitrineOS `/docs/json` (v2.1.0), Operator UI
+  `src/lib/providers/data-provider/index.ts`, Hasura metadata
+  `public_Locations.yaml`, `public_ChargingStations.yaml`, `public_Evses.yaml`,
+  `public_Connectors.yaml`, and the Hasura metadata for the single default
+  tenant.
+
+### ADR-0024: Phase 2 ingestion roles land in PR 2b
+
+- **Context.** PR 2a delivers the schema, RLS, registration, rotation, adapter
+  clients and Hasura/Keycloak plumbing. Ingestion requires AMQP consumption,
+  SECURITY DEFINER write functions, retry/DLQ behavior and simulator proof.
+- **Decision.** PR 2a creates the event tables, partitions, parent-only grants
+  and FORCE RLS. The `evstation_ingest` login role, `evstation_ingest_definer`
+  functions, AMQP user/bindings, worker, offline sweeper and session
+  reconciliation land in PR 2b. No ingest role or provider credential is
+  granted to the API or browser in 2a.
+- **Consequences.** Until 2b, event tables remain read-only/empty at the API
+  layer and no CitrineOS event consumer exists. PR 2b is the pause point for
+  ingestion + simulator E2E.

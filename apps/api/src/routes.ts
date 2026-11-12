@@ -8,6 +8,8 @@ import { requireCapability } from './authorize.js';
 import type { ApiConfig } from './config.js';
 import type { ApiDb } from './db.js';
 import { AppError } from './errors.js';
+import type { CsmsAdapter } from '@evstation/csms-adapter';
+import { CsmsError } from '@evstation/csms-adapter';
 import type { Mailer } from './mailer.js';
 import { PaginationQuery, decodeCursor, page } from './pagination.js';
 import type { Principal, Role } from './principal.js';
@@ -75,6 +77,39 @@ const InvitationAccept = z.object({ token: z.string().min(20).max(512) }).strict
 const IdParams = z.object({ id: uuid }).strict();
 const InvitationParams = z.object({ tenantId: uuid, invitationId: uuid }).strict();
 const TenantParams = z.object({ tenantId: uuid }).strict();
+const StationCreate = z
+  .object({
+    site_id: uuid,
+    station_ref: z.string().trim().min(8).max(20),
+    vendor: z.string().trim().max(200).nullable().optional(),
+    model: z.string().trim().max(200).nullable().optional(),
+    serial: z.string().trim().max(200).nullable().optional(),
+    firmware_version: z.string().trim().max(200).nullable().optional(),
+    latitude: z.number().finite().min(-90).max(90).optional(),
+    longitude: z.number().finite().min(-180).max(180).optional(),
+    connectors: z
+      .array(
+        z
+          .object({
+            connector_number: z.number().int().positive(),
+            type: z.string().trim().max(100).nullable().optional(),
+            max_power_w: z.number().int().positive().nullable().optional(),
+          })
+          .strict(),
+      )
+      .max(50)
+      .optional(),
+  })
+  .strict();
+const StationUpdate = z
+  .object({
+    vendor: z.string().trim().max(200).nullable().optional(),
+    model: z.string().trim().max(200).nullable().optional(),
+    serial: z.string().trim().max(200).nullable().optional(),
+    firmware_version: z.string().trim().max(200).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'at least one field is required');
 
 interface RouteContext {
   request: FastifyRequest;
@@ -85,6 +120,7 @@ interface RouteContext {
   tenantId: string | undefined;
   config: ApiConfig;
   mailer: Mailer;
+  adapter: CsmsAdapter;
   afterCommit: (task: () => Promise<void>) => void;
 }
 
@@ -99,6 +135,7 @@ export interface RouteDefinition {
   handler: (ctx: RouteContext) => Promise<unknown>;
   schema?: Record<string, unknown>;
   isolation?: { body?: Record<string, unknown>; params?: Record<string, string> };
+  config?: Record<string, unknown>;
 }
 
 export const ROUTES: RouteDefinition[] = [
@@ -584,6 +621,264 @@ export const ROUTES: RouteDefinition[] = [
     },
   },
   {
+    method: 'GET',
+    url: '/stations',
+    tenantSource: 'header',
+    capability: 'station.read',
+    schema: { tags: ['stations'], querystring: PaginationQuery },
+    async handler({ client, tenantId, request }) {
+      if (!tenantId) throw new AppError(400, 'TENANT_REQUIRED', 'X-Tenant-Id is required');
+      const query = PaginationQuery.parse(request.query);
+      const { rows } = await client.query(
+        `SELECT s.id, s.tenant_id, s.site_id, s.station_ref, s.registration_status,
+                s.credentials_state, s.vendor, s.model, s.serial, s.firmware_version,
+                s.ocpp_version, s.created_at, s.updated_at,
+                r.connection_state, r.last_heartbeat_at, r.last_connected_at
+         FROM app.stations s
+         LEFT JOIN app.station_runtime_state r ON r.station_id = s.id
+         WHERE s.tenant_id = $1
+         ORDER BY s.station_ref, s.id LIMIT $2`,
+        [tenantId, query.limit + 1],
+      );
+      return { stations: rows.slice(0, query.limit), next_cursor: null };
+    },
+  },
+  {
+    method: 'POST',
+    url: '/stations',
+    tenantSource: 'header',
+    capability: 'station.create',
+    auditAction: 'station.created',
+    schema: { tags: ['stations'], body: StationCreate },
+    isolation: {
+      body: { site_id: '20000000-0000-4000-8000-000000000001', station_ref: 'ACME-BLR-900' },
+    },
+    async handler({ client, principal, tenantId, request, reply, adapter }) {
+      if (!tenantId) throw new AppError(400, 'TENANT_REQUIRED', 'X-Tenant-Id is required');
+      const body = StationCreate.parse(request.body);
+      const site = await client.query<{
+        site_code: string;
+        org_code: string;
+        csms_location_id: number | null;
+      }>(
+        `SELECT s.site_code, t.org_code, s.csms_location_id
+         FROM app.sites s JOIN app.tenants t ON t.id = s.tenant_id
+         WHERE s.id = $1 AND s.tenant_id = $2`,
+        [body.site_id, tenantId],
+      );
+      const location = site.rows[0];
+      if (!location?.site_code || !location.org_code) {
+        throw new AppError(409, 'SITE_CODE_REQUIRED', 'site_code and org_code are required');
+      }
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref, vendor, model, serial,
+           firmware_version, ocpp_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ocpp1.6') RETURNING id`,
+        [
+          tenantId,
+          body.site_id,
+          location.org_code,
+          body.station_ref,
+          body.vendor ?? null,
+          body.model ?? null,
+          body.serial ?? null,
+          body.firmware_version ?? null,
+        ],
+      );
+      const stationId = inserted.rows[0]!.id;
+      try {
+        const result = await adapter.registerStation({
+          stationId,
+          tenantId,
+          siteId: body.site_id,
+          stationRef: body.station_ref,
+          orgCode: location.org_code,
+          siteCode: location.site_code,
+          csmsLocationId: location.csms_location_id,
+          latitude: body.latitude,
+          longitude: body.longitude,
+          vendor: body.vendor,
+          model: body.model,
+          serial: body.serial,
+          firmwareVersion: body.firmware_version,
+          ocppVersion: 'ocpp1.6',
+          connectors: body.connectors?.map((item) => ({
+            connectorNumber: item.connector_number,
+            type: item.type,
+            maxPowerW: item.max_power_w,
+          })),
+        });
+        if (result.csmsLocationId) {
+          await client.query('SELECT app.set_site_csms_location($1, $2)', [
+            body.site_id,
+            result.csmsLocationId,
+          ]);
+        }
+        await client.query('SELECT app.mark_station_registered($1, $2)', [
+          stationId,
+          result.csmsStationId,
+        ]);
+        const credentials = await adapter.provisionPassword(body.station_ref);
+        await client.query('SELECT app.mark_station_credentials_provisioned($1)', [stationId]);
+        await writeAudit(client, principal, {
+          tenantId,
+          action: 'station.created',
+          resourceType: 'station',
+          resourceId: stationId,
+          requestId: request.id,
+        });
+        void reply.code(201);
+        void reply.header('cache-control', 'no-store');
+        return {
+          station: {
+            id: stationId,
+            station_ref: body.station_ref,
+            registration_status: 'registered',
+          },
+          credentials: { username: body.station_ref, password: credentials },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'registration failed';
+        await client.query('SELECT app.mark_station_registration_failed($1, $2)', [
+          stationId,
+          message,
+        ]);
+        void reply.code(error instanceof CsmsError && error.code === 'CSMS_CONFLICT' ? 409 : 502);
+        return {
+          error: {
+            code: error instanceof CsmsError ? error.code : 'CSMS_REGISTRATION_FAILED',
+            message,
+          },
+          station: {
+            id: stationId,
+            station_ref: body.station_ref,
+            registration_status: 'registration_failed',
+          },
+        };
+      }
+    },
+  },
+  {
+    method: 'GET',
+    url: '/stations/:id',
+    tenantSource: 'header',
+    capability: 'station.read',
+    schema: { tags: ['stations'], params: IdParams },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      const params = IdParams.parse(request.params);
+      const { rows } = await client.query(
+        `SELECT s.*, r.connection_state, r.last_heartbeat_at, r.last_connected_at
+         FROM app.stations s LEFT JOIN app.station_runtime_state r ON r.station_id = s.id
+         WHERE s.id = $1 AND s.tenant_id = $2`,
+        [params.id, tenantId],
+      );
+      if (!rows[0]) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      return rows[0];
+    },
+  },
+  {
+    method: 'PATCH',
+    url: '/stations/:id',
+    tenantSource: 'header',
+    capability: 'station.update',
+    auditAction: 'station.updated',
+    schema: { tags: ['stations'], params: IdParams, body: StationUpdate },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' }, body: { vendor: 'x' } },
+    async handler({ client, principal, tenantId, request }) {
+      const params = IdParams.parse(request.params);
+      const body = StationUpdate.parse(request.body);
+      const { rows } = await client.query(
+        `UPDATE app.stations SET vendor = coalesce($3, vendor), model = coalesce($4, model),
+           serial = coalesce($5, serial), firmware_version = coalesce($6, firmware_version)
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, station_ref, vendor, model, serial, firmware_version`,
+        [params.id, tenantId, body.vendor, body.model, body.serial, body.firmware_version],
+      );
+      if (!rows[0]) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      await writeAudit(client, principal, {
+        tenantId: tenantId ?? null,
+        action: 'station.updated',
+        resourceType: 'station',
+        resourceId: params.id,
+        requestId: request.id,
+      });
+      return rows[0];
+    },
+  },
+  {
+    method: 'GET',
+    url: '/stations/:id/connectors',
+    tenantSource: 'header',
+    capability: 'station.read',
+    schema: { tags: ['stations'], params: IdParams },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      const params = IdParams.parse(request.params);
+      const station = await client.query(
+        'SELECT id FROM app.stations WHERE id = $1 AND tenant_id = $2',
+        [params.id, tenantId],
+      );
+      if (!station.rows[0]) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      const { rows } = await client.query(
+        `SELECT id, connector_number, type, max_power_w, status, error_code, last_status_at
+         FROM app.connectors WHERE station_id = $1 AND tenant_id = $2 ORDER BY connector_number`,
+        [params.id, tenantId],
+      );
+      return { connectors: rows };
+    },
+  },
+  {
+    method: 'POST',
+    url: '/stations/:id/credentials/rotate',
+    tenantSource: 'header',
+    capability: 'station.credentials.rotate',
+    auditAction: 'station.credentials_rotated',
+    schema: { tags: ['stations'], params: IdParams },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' } },
+    config: {
+      rateLimit: {
+        max: 50,
+        timeWindow: 60_000,
+        keyGenerator: (request: FastifyRequest) =>
+          `${request.claims?.sub ?? 'anonymous'}:${(request.params as { id?: string }).id ?? 'none'}`,
+      },
+    },
+    async handler({ client, principal, tenantId, request, reply, adapter }) {
+      const params = IdParams.parse(request.params);
+      const station = await client.query<{ station_ref: string }>(
+        'SELECT station_ref FROM app.stations WHERE id = $1 AND tenant_id = $2',
+        [params.id, tenantId],
+      );
+      const row = station.rows[0];
+      if (!row) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      try {
+        const credentials = await adapter.rotatePassword(row.station_ref);
+        await client.query('SELECT app.mark_station_credentials_provisioned($1)', [params.id]);
+        await writeAudit(client, principal, {
+          tenantId: tenantId ?? null,
+          action: 'station.credentials_rotated',
+          resourceType: 'station',
+          resourceId: params.id,
+          requestId: request.id,
+        });
+        void reply.header('cache-control', 'no-store');
+        return {
+          station_id: params.id,
+          credentials: { username: row.station_ref, password: credentials },
+        };
+      } catch {
+        await client.query('SELECT app.mark_station_rotation_incomplete($1)', [params.id]);
+        void reply.code(502);
+        return {
+          error: { code: 'CSMS_ROTATION_INCOMPLETE', message: 'credential rotation incomplete' },
+          station_id: params.id,
+          credentials_state: 'rotation_incomplete',
+        };
+      }
+    },
+  },
+  {
     method: 'POST',
     url: '/invitations/accept',
     tenantSource: 'none',
@@ -636,6 +931,7 @@ export function registerRoutes(app: FastifyInstance, dispatch: RouteDispatcher):
       method: definition.method,
       url: definition.url,
       schema: definition.schema as never,
+      config: definition.config as never,
       handler: (request, reply) => dispatch(definition, request, reply),
     });
   }

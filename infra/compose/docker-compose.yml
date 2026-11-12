@@ -175,6 +175,7 @@ services:
       HASURA_GRAPHQL_DATABASE_URL: postgres://citrine:citrine@ocpp-db:5432/citrine
       # Deviation note 7: Hasura is admin-secret-protected (Phase 0 mini-goal).
       HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_ADMIN_SECRET:?HASURA_ADMIN_SECRET missing in infra/compose/.env}
+      HASURA_GRAPHQL_JWT_SECRET: '{"type":"RS256","jwk_url":"http://keycloak:8080/realms/evstation/protocol/openid-connect/certs","issuer":"http://localhost:8180/realms/evstation","audience":"citrineos-api","claims_map":{"x-hasura-allowed-roles":{"path":"$.hasura_roles"},"x-hasura-default-role":{"path":"$.hasura_role"},"x-hasura-user-id":{"path":"$.sub"},"x-hasura-tenant-id":{"path":"$.tenant_id"}}}'
       HASURA_GRAPHQL_ENABLE_CONSOLE: 'true'
       HASURA_GRAPHQL_DEV_MODE: 'true'
       HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup, http-log, webhook-log, websocket-log, query-log

@@ -664,6 +664,12 @@ const MATRIX_ALLOW: Record<string, Array<keyof typeof MATRIX_ACTORS>> = {
   'POST /tenants': ['platform_admin'],
   'PATCH /tenants/:id': ['platform_admin'],
   'GET /sites': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /stations': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'POST /stations': ['platform_admin', 'tenant_admin'],
+  'GET /stations/:id': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'PATCH /stations/:id': ['platform_admin', 'tenant_admin', 'site_manager'],
+  'GET /stations/:id/connectors': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'POST /stations/:id/credentials/rotate': ['platform_admin', 'tenant_admin'],
   'POST /sites': ['platform_admin', 'tenant_admin'],
   'PATCH /sites/:id': ['platform_admin', 'tenant_admin', 'site_manager'],
   'GET /users': ['platform_admin', 'tenant_admin'],
@@ -708,6 +714,10 @@ function matrixBody(
       return { name: `Matrix ${actor}` };
     case 'PATCH /sites/:id':
       return { name: `Matrix ${actor}` };
+    case 'POST /stations':
+      return { site_id: IDS.siteA1, station_ref: `ACME-BLR-${String(Date.now()).slice(-3)}` };
+    case 'PATCH /stations/:id':
+      return { vendor: `Matrix ${actor}` };
     case 'PATCH /users/:id/role':
       return { role: 'viewer' };
     case 'POST /tenants/:tenantId/invitations':
@@ -1423,5 +1433,90 @@ describe('denied attempts are audited', () => {
     } finally {
       await db.superuser.query('GRANT UPDATE (name) ON app.sites TO evstation_app');
     }
+  });
+});
+
+describe('station registration and credential rotation', () => {
+  it('registers a station through the fake adapter and returns credentials once', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: { site_id: IDS.siteA1, station_ref: 'ACME-BLR-800', vendor: 'Demo' },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.headers['cache-control']).toBe('no-store');
+    const body = response.json();
+    expect(body.station).toMatchObject({
+      station_ref: 'ACME-BLR-800',
+      registration_status: 'registered',
+    });
+    expect(body.credentials.username).toBe('ACME-BLR-800');
+    expect(body.credentials.password).toMatch(/^fake-/u);
+
+    const { rows } = await db.superuser.query<{
+      csms_station_id: number;
+      credentials_state: string;
+    }>('SELECT csms_station_id, credentials_state FROM app.stations WHERE id = $1', [
+      body.station.id,
+    ]);
+    expect(rows[0]).toEqual({
+      csms_station_id: expect.any(Number),
+      credentials_state: 'provisioned',
+    });
+    const runtime = await db.superuser.query(
+      'SELECT 1 FROM app.station_runtime_state WHERE station_id = $1',
+      [body.station.id],
+    );
+    expect(runtime.rowCount).toBe(1);
+    const audit = await db.superuser.query(
+      'SELECT action FROM app.audit_log WHERE resource_id = $1 ORDER BY id',
+      [body.station.id],
+    );
+    expect(audit.rows.map((row) => row.action)).toContain('station.created');
+  });
+
+  it('rotates credentials for tenant admins only and audits the rotation', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: { site_id: IDS.siteA1, station_ref: 'ACME-BLR-801' },
+    });
+    const stationId = created.json().station.id as string;
+
+    const rotated = await app.inject({
+      method: 'POST',
+      url: `/stations/${stationId}/credentials/rotate`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.headers['cache-control']).toBe('no-store');
+    expect(rotated.json().credentials.password).toMatch(/^rotated-/u);
+
+    for (const token of ['managerA', 'viewerA']) {
+      const denied = await app.inject({
+        method: 'POST',
+        url: `/stations/${stationId}/credentials/rotate`,
+        headers: { ...auth(token), 'x-tenant-id': IDS.tenantA },
+      });
+      expect(denied.statusCode, token).toBe(403);
+    }
+
+    const audit = await db.superuser.query(
+      'SELECT action FROM app.audit_log WHERE resource_id = $1 ORDER BY id',
+      [stationId],
+    );
+    expect(audit.rows.map((row) => row.action)).toContain('station.credentials_rotated');
+  });
+
+  it('denies site managers station creation before any CitrineOS call', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('managerA'), 'x-tenant-id': IDS.tenantA },
+      payload: { site_id: IDS.siteA1, station_ref: 'ACME-BLR-802' },
+    });
+    expect(response.statusCode).toBe(403);
   });
 });

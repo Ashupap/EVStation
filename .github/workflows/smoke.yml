@@ -32,6 +32,12 @@ jobs:
         run: pnpm smoke
       - name: Production-like OCPP station policy
         run: pnpm test:ocpp:production-like
+      - name: Live Hasura adapter permissions
+        run: |
+          set -a
+          . infra/compose/.env
+          set +a
+          HASURA_LIVE_TEST=1 pnpm vitest run packages/csms-adapter/test/hasura-role.test.ts packages/csms-adapter/test/hasura-live.test.ts
       - name: Prepare Phase 1 database
         run: pnpm db:migrate && pnpm db:seed
       - name: Install dashboard browser

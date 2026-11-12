@@ -64,9 +64,10 @@ async function seedStations() {
       [id, tenantId, siteId, orgCode, stationRef],
     );
     await client.query(
-      `INSERT INTO app.station_runtime_state (station_id, tenant_id, site_id, connection_state, last_heartbeat_at)
-       VALUES ($1, $2, $3, 'connected', now())`,
-      [id, tenantId, siteId],
+      `UPDATE app.station_runtime_state
+       SET connection_state = 'connected', last_heartbeat_at = now()
+       WHERE station_id = $1`,
+      [id],
     );
   }
   const connectors: Array<[string, string, string, string, number]> = [
@@ -256,6 +257,93 @@ describe('Phase 2 station/session RLS', () => {
   });
 });
 
+describe('Phase 2 state, runtime and decommission invariants', () => {
+  test('station insert creates runtime state atomically', async () => {
+    await db.superuser.query(
+      `INSERT INTO app.stations (id, tenant_id, site_id, org_code, station_ref)
+       VALUES ('30000000-0000-4000-8000-000000000010', $1, $2, 'ACME', 'ACME-BLR-010')`,
+      [A, SITE_A1],
+    );
+    const { rows } = await db.superuser.query<{ connection_state: string }>(
+      'SELECT connection_state FROM app.station_runtime_state WHERE station_id = $1',
+      ['30000000-0000-4000-8000-000000000010'],
+    );
+    expect(rows).toEqual([{ connection_state: 'unknown' }]);
+  });
+
+  test('site managers cannot bind CSMS ids or transition registration/credentials', async () => {
+    await appTx(db, { actor: MANAGER_A, tenant: A }, async (client) => {
+      expect(
+        (await fail(client, 'SELECT app.set_station_csms_binding($1, 99)', [STATION_A1])).code,
+      ).toBe('42501');
+      expect(
+        (await fail(client, 'SELECT app.mark_station_registered($1, 99)', [STATION_A1])).code,
+      ).toBe('42501');
+      expect(
+        (await fail(client, 'SELECT app.mark_station_credentials_provisioned($1)', [STATION_A1]))
+          .code,
+      ).toBe('42501');
+    });
+    await appCommit(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      await client.query('SELECT app.set_station_csms_binding($1, 99)', [STATION_A1]);
+      await client.query('SELECT app.mark_station_registered($1, 99)', [STATION_A1]);
+      await client.query('SELECT app.mark_station_credentials_provisioned($1)', [STATION_A1]);
+    });
+    const { rows } = await db.superuser.query<{
+      csms_station_id: number;
+      registration_status: string;
+      credentials_state: string;
+    }>(
+      'SELECT csms_station_id, registration_status, credentials_state FROM app.stations WHERE id = $1',
+      [STATION_A1],
+    );
+    expect(rows).toEqual([
+      { csms_station_id: 99, registration_status: 'registered', credentials_state: 'provisioned' },
+    ]);
+  });
+
+  test('tenant admins cannot bind/transition a station in another tenant', async () => {
+    await appTx(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      expect(
+        (await fail(client, 'SELECT app.set_station_csms_binding($1, 123)', [STATION_B1])).code,
+      ).toBe('42501');
+    });
+  });
+
+  test('client grants do not include CSMS binding or state-transition columns', async () => {
+    for (const [table, column, privilege] of [
+      ['stations', 'csms_station_id', 'UPDATE'],
+      ['stations', 'registration_status', 'UPDATE'],
+      ['stations', 'credentials_state', 'UPDATE'],
+      ['sites', 'csms_location_id', 'UPDATE'],
+    ]) {
+      const { rows } = await db.superuser.query<{ ok: boolean }>(
+        'SELECT has_column_privilege($1, $2, $3, $4) AS ok',
+        ['evstation_app', `app.${table}`, column, privilege],
+      );
+      expect(rows[0]?.ok, `${table}.${column}`).toBe(false);
+    }
+  });
+
+  test('one starting/active session per connector and RESTRICT decommission', async () => {
+    await expect(
+      db.superuser.query(
+        `INSERT INTO app.sessions (tenant_id, site_id, station_id, connector_id,
+           csms_transaction_ref, csms_start_correlation_id, started_at, status)
+         VALUES ($1, $2, $3, $4, 'live-2', 'live-corr-2', now(), 'starting')`,
+        [A, SITE_A1, STATION_A1, CONNECTOR_A1],
+      ),
+    ).rejects.toMatchObject({ code: '23505' });
+
+    await expect(
+      db.superuser.query('DELETE FROM app.stations WHERE id = $1', [STATION_A1]),
+    ).rejects.toMatchObject({ code: '23503' });
+    await expect(
+      db.superuser.query('DELETE FROM app.sites WHERE id = $1', [SITE_A1]),
+    ).rejects.toMatchObject({ code: '23503' });
+  });
+});
+
 describe('Phase 2 partition and dedup invariants', () => {
   test('the unique key is global across the partitioned parent', async () => {
     const insert = (timestamp: string, ref: string) =>
@@ -280,5 +368,111 @@ describe('Phase 2 partition and dedup invariants', () => {
       );
       expect((await fail(client, 'SELECT * FROM app.ingestion_events_2026_11')).code).toBe('42501');
     });
+  });
+});
+
+describe('Phase 2 partition maintenance', () => {
+  test('moves default rows into a new monthly partition and preserves RLS/dedup', async () => {
+    const timestamp = '2027-03-15T00:00:00Z';
+    const insert = (ref: string) =>
+      db.superuser.query(
+        `INSERT INTO app.station_status_events
+           (tenant_id, site_id, station_id, connector_id, status, csms_event_ref, csms_timestamp)
+         VALUES ($1, $2, $3, $4, 'available', $5, $6)`,
+        [A, SITE_A1, STATION_A1, CONNECTOR_A1, ref, timestamp],
+      );
+    await insert('default-move');
+    const before = await db.superuser.query<{ n: string }>(
+      'SELECT count(*)::text AS n FROM app.station_status_events_default',
+    );
+    expect(before.rows[0]?.n).toBe('1');
+
+    await db.superuser.query(
+      "SELECT app.ensure_event_partition('station_status_events', '2027-03-01')",
+    );
+    const afterDefault = await db.superuser.query<{ n: string }>(
+      'SELECT count(*)::text AS n FROM app.station_status_events_default',
+    );
+    const afterNew = await db.superuser.query<{ n: string }>(
+      'SELECT count(*)::text AS n FROM app.station_status_events_2027_03',
+    );
+    expect(afterDefault.rows[0]?.n).toBe('0');
+    expect(afterNew.rows[0]?.n).toBe('1');
+
+    const partition = await db.superuser.query<{
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT relrowsecurity, relforcerowsecurity FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'app' AND c.relname = 'station_status_events_2027_03'`,
+    );
+    expect(partition.rows[0]).toEqual({ relrowsecurity: true, relforcerowsecurity: true });
+    const grant = await db.superuser.query<{ ok: boolean }>(
+      "SELECT has_table_privilege('evstation_app', 'app.station_status_events_2027_03', 'SELECT') AS ok",
+    );
+    expect(grant.rows[0]?.ok).toBe(false);
+
+    await expect(insert('default-move')).rejects.toMatchObject({ code: '23505' });
+    await appTx(db, { actor: ADMIN_A, tenant: A }, async (client) => {
+      expect((await fail(client, 'SELECT * FROM app.station_status_events_2027_03')).code).toBe(
+        '42501',
+      );
+    });
+  });
+
+  test('moves meter values and deduplicates across the default boundary', async () => {
+    const timestamp = '2027-04-10T00:00:00Z';
+    const insert = () =>
+      db.superuser.query(
+        `INSERT INTO app.session_meter_values
+           (tenant_id, site_id, station_id, session_id, csms_event_ref, csms_timestamp, energy_wh)
+         VALUES ($1, $2, $3, $4, 'meter-default-move', $5, 10)`,
+        [A, SITE_A1, STATION_A1, SESSION_A1, timestamp],
+      );
+    await insert();
+    await db.superuser.query(
+      "SELECT app.ensure_event_partition('session_meter_values', '2027-04-01')",
+    );
+    const counts = await db.superuser.query<{ parent: string; child: string }>(
+      `SELECT
+         (SELECT count(*)::text FROM app.session_meter_values WHERE csms_event_ref = 'meter-default-move') AS parent,
+         (SELECT count(*)::text FROM app.session_meter_values_2027_04 WHERE csms_event_ref = 'meter-default-move') AS child`,
+    );
+    expect(counts.rows[0]).toEqual({ parent: '1', child: '1' });
+    await expect(insert()).rejects.toMatchObject({ code: '23505' });
+  });
+});
+
+describe('Phase 2 identity backfill', () => {
+  test('collision-safe org/site code backfill handles truncated duplicates', async () => {
+    const tenantOne = '90000000-0000-4000-8000-000000000101';
+    const tenantTwo = '90000000-0000-4000-8000-000000000102';
+    await db.superuser.query(
+      `INSERT INTO app.tenants (id, name, slug, org_code) VALUES
+       ($1, 'Duplicate One', 'duplicate-long-name-one', NULL),
+       ($2, 'Duplicate Two', 'duplicate-long-name-two', NULL)`,
+      [tenantOne, tenantTwo],
+    );
+    await db.superuser.query(
+      `INSERT INTO app.sites (id, tenant_id, name, site_code) VALUES
+       ('90000000-0000-4000-8000-000000000201', $1, 'Duplicate Site', NULL),
+       ('90000000-0000-4000-8000-000000000202', $1, 'Duplicate Site', NULL)`,
+      [tenantOne],
+    );
+    await db.superuser.query('SELECT app.backfill_org_codes()');
+    await db.superuser.query('SELECT app.backfill_site_codes()');
+    const orgs = await db.superuser.query<{ org_code: string }>(
+      'SELECT org_code FROM app.tenants WHERE id IN ($1, $2) ORDER BY org_code',
+      [tenantOne, tenantTwo],
+    );
+    expect(orgs.rows).toHaveLength(2);
+    expect(orgs.rows[0]?.org_code).not.toBe(orgs.rows[1]?.org_code);
+    const sites = await db.superuser.query<{ site_code: string }>(
+      'SELECT site_code FROM app.sites WHERE tenant_id = $1 ORDER BY site_code',
+      [tenantOne],
+    );
+    expect(sites.rows).toHaveLength(2);
+    expect(sites.rows[0]?.site_code).not.toBe(sites.rows[1]?.site_code);
   });
 });

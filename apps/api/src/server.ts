@@ -1,3 +1,4 @@
+import { createCitrineOsAdapter, loadCsmsAdapterConfig } from '@evstation/csms-adapter';
 import { buildApp } from './app.js';
 import { createJwtVerifier } from './auth.js';
 import { loadConfig } from './config.js';
@@ -12,7 +13,8 @@ const verifier = createJwtVerifier({
   audience: config.oidcAudience,
   jwksUri: config.oidcJwksUri,
 });
-const app = await buildApp({ db, config, verifier });
+const adapter = createCitrineOsAdapter(loadCsmsAdapterConfig(process.env, config.nodeEnv));
+const app = await buildApp({ db, config, verifier, adapter });
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'shutting down');

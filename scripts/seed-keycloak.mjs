@@ -38,6 +38,8 @@ const baseUrl = `http://127.0.0.1:${keycloakPort}`;
 const adminUser = required(vars, 'KC_BOOTSTRAP_ADMIN_USERNAME');
 const adminPassword = required(vars, 'KC_BOOTSTRAP_ADMIN_PASSWORD');
 const clientSecret = required(vars, 'KC_DASHBOARD_CLIENT_SECRET');
+const provisionerSecret = required(vars, 'KC_CSMS_PROVISIONER_CLIENT_SECRET');
+const readerSecret = required(vars, 'KC_CSMS_READER_CLIENT_SECRET');
 const realm = 'evstation';
 const clientId = 'dashboard';
 const e2ePassword = process.env.E2E_USER_PASSWORD || 'evstation-dev-password';
@@ -144,6 +146,164 @@ async function applyClient(token) {
   );
 }
 
+async function ensureRealmRole(token, name) {
+  const headers = { ...authorization(token), 'content-type': 'application/json' };
+  const existing = await request(
+    `${baseUrl}/admin/realms/${realm}/roles?search=${encodeURIComponent(name)}`,
+    { headers: authorization(token) },
+  );
+  const roles = await existing.json();
+  if (!roles.some((role) => role.name === name)) {
+    await request(`${baseUrl}/admin/realms/${realm}/roles`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name, description: 'EVStation Phase 2 service role' }),
+    });
+  }
+  return (
+    await request(`${baseUrl}/admin/realms/${realm}/roles/${encodeURIComponent(name)}`, {
+      headers: authorization(token),
+    })
+  ).json();
+}
+
+async function applyServiceClient(token, { clientId: id, secret, realmRole, hasuraRole }) {
+  const headers = { ...authorization(token), 'content-type': 'application/json' };
+  let clients = await request(
+    `${baseUrl}/admin/realms/${realm}/clients?clientId=${encodeURIComponent(id)}`,
+    { headers: authorization(token) },
+  );
+  let client = (await clients.json())[0];
+  if (!client) {
+    await request(`${baseUrl}/admin/realms/${realm}/clients`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        clientId: id,
+        enabled: true,
+        protocol: 'openid-connect',
+        publicClient: false,
+        serviceAccountsEnabled: true,
+        standardFlowEnabled: false,
+        directAccessGrantsEnabled: false,
+        clientAuthenticatorType: 'client-secret',
+      }),
+    });
+    clients = await request(
+      `${baseUrl}/admin/realms/${realm}/clients?clientId=${encodeURIComponent(id)}`,
+      { headers: authorization(token) },
+    );
+    client = (await clients.json())[0];
+  }
+
+  const existingMappers = await request(
+    `${baseUrl}/admin/realms/${realm}/clients/${client.id}/protocol-mappers/models`,
+    { headers: authorization(token) },
+  );
+  const mappers = await existingMappers.json();
+  const wanted = [
+    {
+      name: 'citrineos-api-audience',
+      protocol: 'openid-connect',
+      protocolMapper: 'oidc-audience-mapper',
+      consentRequired: false,
+      config: {
+        'included.custom.audience': 'citrineos-api',
+        'access.token.claim': 'true',
+        'id.token.claim': 'false',
+      },
+    },
+    {
+      name: 'tenant-id',
+      protocol: 'openid-connect',
+      protocolMapper: 'oidc-hardcoded-claim-mapper',
+      consentRequired: false,
+      config: {
+        'claim.name': 'tenant_id',
+        'claim.value': '1',
+        'jsonType.label': 'String',
+        'access.token.claim': 'true',
+        'id.token.claim': 'false',
+        'userinfo.token.claim': 'false',
+      },
+    },
+    {
+      name: 'hasura-role',
+      protocol: 'openid-connect',
+      protocolMapper: 'oidc-hardcoded-claim-mapper',
+      consentRequired: false,
+      config: {
+        'claim.name': 'hasura_role',
+        'claim.value': hasuraRole,
+        'jsonType.label': 'String',
+        'access.token.claim': 'true',
+        'id.token.claim': 'false',
+        'userinfo.token.claim': 'false',
+      },
+    },
+    {
+      name: 'hasura-roles',
+      protocol: 'openid-connect',
+      protocolMapper: 'oidc-hardcoded-claim-mapper',
+      consentRequired: false,
+      config: {
+        'claim.name': 'hasura_roles',
+        'claim.value': JSON.stringify([hasuraRole]),
+        'jsonType.label': 'JSON',
+        'access.token.claim': 'true',
+        'id.token.claim': 'false',
+        'userinfo.token.claim': 'false',
+      },
+    },
+  ];
+  for (const mapper of wanted) {
+    const current = mappers.find((item) => item.name === mapper.name);
+    if (current) {
+      await request(
+        `${baseUrl}/admin/realms/${realm}/clients/${client.id}/protocol-mappers/models/${current.id}`,
+        { method: 'PUT', headers, body: JSON.stringify({ ...current, ...mapper, id: current.id }) },
+      );
+    } else {
+      await request(
+        `${baseUrl}/admin/realms/${realm}/clients/${client.id}/protocol-mappers/models`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(mapper),
+        },
+      );
+    }
+  }
+
+  await request(`${baseUrl}/admin/realms/${realm}/clients/${client.id}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      ...client,
+      publicClient: false,
+      serviceAccountsEnabled: true,
+      standardFlowEnabled: false,
+      directAccessGrantsEnabled: false,
+      clientAuthenticatorType: 'client-secret',
+      secret,
+      redirectUris: [],
+      webOrigins: [],
+    }),
+  });
+
+  const serviceUserResponse = await request(
+    `${baseUrl}/admin/realms/${realm}/clients/${client.id}/service-account-user`,
+    { headers: authorization(token) },
+  );
+  const serviceUser = await serviceUserResponse.json();
+  const role = await ensureRealmRole(token, realmRole);
+  await request(`${baseUrl}/admin/realms/${realm}/users/${serviceUser.id}/role-mappings/realm`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify([{ id: role.id, name: role.name }]),
+  });
+}
+
 async function applyUsers(token) {
   for (const [id, email] of E2E_USERS) {
     const lookup = await request(
@@ -189,6 +349,18 @@ async function applyUsers(token) {
 
 async function seed(token) {
   await applyClient(token);
+  await applyServiceClient(token, {
+    clientId: 'csms-provisioner',
+    secret: provisionerSecret,
+    realmRole: 'evstation_adapter',
+    hasuraRole: 'evstation_adapter',
+  });
+  await applyServiceClient(token, {
+    clientId: 'csms-reader',
+    secret: readerSecret,
+    realmRole: 'evstation_reader',
+    hasuraRole: 'evstation_reader',
+  });
   await applyUsers(token);
 }
 
@@ -197,7 +369,7 @@ for (let attempt = 1; attempt <= 45; attempt += 1) {
   try {
     await seed(await getAdminToken());
     console.log(
-      'keycloak-seed: applied dashboard client, audience mapper, and verified test users',
+      'keycloak-seed: applied dashboard, service clients, mappers, and verified test users',
     );
     process.exit(0);
   } catch (error) {

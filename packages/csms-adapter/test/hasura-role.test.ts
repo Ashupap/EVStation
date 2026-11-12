@@ -12,6 +12,7 @@ interface Permission {
     columns?: string[] | string;
     filter?: unknown;
     check?: unknown;
+    set?: unknown;
     allow_aggregations?: boolean;
   };
 }
@@ -56,21 +57,16 @@ function serialized(value: unknown): string {
 }
 
 describe('restricted Hasura role for CitrineOS provisioning', () => {
-  const overlay = (() => {
-    try {
-      return loadOverlay();
-    } catch {
-      return undefined;
-    }
-  })();
+  const overlay = loadOverlay();
 
   it('commits the adapter metadata overlay', () => {
-    expect(overlay, `expected ${overlayPath}`).toBeDefined();
+    expect(overlay.role).toBe('evstation_adapter');
+    expect(existsSync(overlayPath)).toBe(true);
   });
 
   it('grants exactly the four provisioning tables and no delete permission', () => {
     const granted = new Set<string>();
-    for (const [name, table] of Object.entries(overlay?.tables ?? {})) {
+    for (const [name, table] of Object.entries(overlay.tables)) {
       for (const kind of ['select', 'insert', 'update', 'delete'] as const) {
         if (
           permissionsFor(table, kind).some((permission) => permission.role === 'evstation_adapter')
@@ -92,7 +88,7 @@ describe('restricted Hasura role for CitrineOS provisioning', () => {
   });
 
   it('uses explicit column allow-lists, never wildcard columns', () => {
-    for (const table of Object.values(overlay?.tables ?? {})) {
+    for (const table of Object.values(overlay.tables)) {
       for (const kind of ['select', 'insert', 'update'] as const) {
         for (const permission of rolePermission(table, kind)) {
           expect(permission.permission.columns).not.toBe('*');
@@ -103,12 +99,12 @@ describe('restricted Hasura role for CitrineOS provisioning', () => {
   });
 
   it('pins tenantId and a managed marker on ChargingStations writes', () => {
-    const stations = overlay?.tables.ChargingStations;
-    if (!stations) return;
+    const stations = overlay.tables.ChargingStations;
     for (const kind of ['insert', 'update'] as const) {
       for (const permission of rolePermission(stations, kind)) {
         const check = serialized(permission.permission.check);
         expect(check).toContain('x-hasura-tenant-id');
+        expect(check).toContain('_contains');
         expect(check).toContain('evstation_managed');
         if (kind === 'update') {
           expect(serialized(permission.permission.filter)).toContain('evstation_managed');
@@ -118,12 +114,14 @@ describe('restricted Hasura role for CitrineOS provisioning', () => {
     for (const permission of rolePermission(stations, 'update')) {
       expect(permission.permission.columns).not.toContain('capabilities');
     }
+    for (const permission of rolePermission(stations, 'insert')) {
+      expect(permission.permission.set).toEqual({ capabilities: { evstation_managed: true } });
+    }
   });
 
   it('requires the station marker when writing Evses and Connectors', () => {
     for (const name of ['Evses', 'Connectors']) {
-      const table = overlay?.tables[name];
-      if (!table) continue;
+      const table = overlay.tables[name];
       for (const kind of ['insert', 'update'] as const) {
         for (const permission of rolePermission(table, kind)) {
           const check = serialized(permission.permission.check);
@@ -137,11 +135,28 @@ describe('restricted Hasura role for CitrineOS provisioning', () => {
     }
   });
 
+  it('grants the reader role select-only on the same four tables', () => {
+    for (const table of Object.values(overlay.tables)) {
+      expect(
+        table.select_permissions?.filter((permission) => permission.role === 'evstation_reader'),
+      ).toHaveLength(1);
+      expect(
+        table.insert_permissions?.filter((permission) => permission.role === 'evstation_reader'),
+      ).toHaveLength(0);
+      expect(
+        table.update_permissions?.filter((permission) => permission.role === 'evstation_reader'),
+      ).toHaveLength(0);
+      expect(
+        table.delete_permissions?.filter((permission) => permission.role === 'evstation_reader'),
+      ).toHaveLength(0);
+    }
+  });
+
   it('does not grant VariableAttributes, delete, or unrelated tables', () => {
-    expect(overlay?.tables.VariableAttributes).toBeUndefined();
-    expect(overlay?.tables.Tenants).toBeUndefined();
-    expect(overlay?.tables.Transactions).toBeUndefined();
-    for (const table of Object.values(overlay?.tables ?? {})) {
+    expect(overlay.tables.VariableAttributes).toBeUndefined();
+    expect(overlay.tables.Tenants).toBeUndefined();
+    expect(overlay.tables.Transactions).toBeUndefined();
+    for (const table of Object.values(overlay.tables)) {
       expect(permissionsFor(table, 'delete')).toHaveLength(0);
     }
   });

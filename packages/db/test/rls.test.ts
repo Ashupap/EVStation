@@ -1345,10 +1345,9 @@ describe('database catalog invariants', () => {
 
     const columnGrants: Array<[string, string, string]> = [
       ['stations', 'station_ref', 'INSERT'],
-      ['stations', 'registration_status', 'UPDATE'],
+      ['stations', 'vendor', 'UPDATE'],
       ['connectors', 'connector_number', 'INSERT'],
       ['connectors', 'last_status_at', 'UPDATE'],
-      ['sites', 'csms_location_id', 'UPDATE'],
     ];
     for (const [table, column, privilege] of columnGrants) {
       const { rows } = await db.superuser.query<{ ok: boolean }>(

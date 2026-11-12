@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@evstation/csms-adapter": "workspace:*",
     "@evstation/db": "workspace:*",
     "@evstation/shared": "workspace:*",
     "@fastify/rate-limit": "11.2.1",
