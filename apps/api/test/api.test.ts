@@ -2,6 +2,7 @@ import { Writable } from 'node:stream';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resetDb, startDb, stopDb, type TestDb } from '../../../packages/db/test/helpers.js';
 import { ROUTES } from '../src/routes.js';
+import { createFakeCsmsAdapter, CsmsError, type CsmsAdapter } from '@evstation/csms-adapter';
 import { BODY_LIMIT_BYTES, buildApp } from '../src/app.js';
 import type { TokenClaims, TokenVerifier } from '../src/auth.js';
 import type { ApiConfig } from '../src/config.js';
@@ -88,7 +89,7 @@ async function waitFor(assertion: () => boolean | Promise<boolean>, timeoutMs = 
 
 beforeAll(async () => {
   db = await startDb();
-  apiDb = createDb(db.appUrl, 4);
+  apiDb = createDb(db.appUrl, 10);
   config.databaseUrlApp = db.appUrl;
   app = await buildApp({
     db: apiDb,
@@ -664,6 +665,13 @@ const MATRIX_ALLOW: Record<string, Array<keyof typeof MATRIX_ACTORS>> = {
   'POST /tenants': ['platform_admin'],
   'PATCH /tenants/:id': ['platform_admin'],
   'GET /sites': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /stations': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'POST /stations': ['platform_admin', 'tenant_admin'],
+  'GET /stations/:id': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'PATCH /stations/:id': ['platform_admin', 'tenant_admin', 'site_manager'],
+  'GET /stations/:id/connectors': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'POST /stations/:id/credentials/rotate': ['platform_admin', 'tenant_admin'],
+  'POST /stations/:id/register/retry': ['platform_admin', 'tenant_admin'],
   'POST /sites': ['platform_admin', 'tenant_admin'],
   'PATCH /sites/:id': ['platform_admin', 'tenant_admin', 'site_manager'],
   'GET /users': ['platform_admin', 'tenant_admin'],
@@ -708,6 +716,15 @@ function matrixBody(
       return { name: `Matrix ${actor}` };
     case 'PATCH /sites/:id':
       return { name: `Matrix ${actor}` };
+    case 'POST /stations':
+      return {
+        site_id: IDS.siteA1,
+        station_ref: `ACME-BLR-${String(Date.now()).slice(-3)}`,
+        latitude: 12.97,
+        longitude: 77.59,
+      };
+    case 'PATCH /stations/:id':
+      return { vendor: `Matrix ${actor}` };
     case 'PATCH /users/:id/role':
       return { role: 'viewer' };
     case 'POST /tenants/:tenantId/invitations':
@@ -1423,5 +1440,337 @@ describe('denied attempts are audited', () => {
     } finally {
       await db.superuser.query('GRANT UPDATE (name) ON app.sites TO evstation_app');
     }
+  });
+});
+
+describe('station registration and credential rotation', () => {
+  it('registers a station through the fake adapter and returns credentials once', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: {
+        site_id: IDS.siteA1,
+        station_ref: 'ACME-BLR-800',
+        vendor: 'Demo',
+        latitude: 12.97,
+        longitude: 77.59,
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.headers['cache-control']).toBe('no-store');
+    const body = response.json();
+    expect(body.station).toMatchObject({
+      station_ref: 'ACME-BLR-800',
+      registration_status: 'registered',
+    });
+    expect(body.credentials.username).toBe('ACME-BLR-800');
+    expect(body.credentials.password).toMatch(/^fake-/u);
+
+    const { rows } = await db.superuser.query<{
+      csms_station_id: number;
+      credentials_state: string;
+    }>('SELECT csms_station_id, credentials_state FROM app.stations WHERE id = $1', [
+      body.station.id,
+    ]);
+    expect(rows[0]).toEqual({
+      csms_station_id: expect.any(Number),
+      credentials_state: 'provisioned',
+    });
+    const runtime = await db.superuser.query(
+      'SELECT 1 FROM app.station_runtime_state WHERE station_id = $1',
+      [body.station.id],
+    );
+    expect(runtime.rowCount).toBe(1);
+    const audit = await db.superuser.query(
+      'SELECT action FROM app.audit_log WHERE resource_id = $1 ORDER BY id',
+      [body.station.id],
+    );
+    expect(audit.rows.map((row) => row.action)).toContain('station.created');
+  });
+
+  it('rotates credentials for tenant admins only and audits the rotation', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: {
+        site_id: IDS.siteA1,
+        station_ref: 'ACME-BLR-801',
+        latitude: 12.97,
+        longitude: 77.59,
+      },
+    });
+    const stationId = created.json().station.id as string;
+
+    const rotated = await app.inject({
+      method: 'POST',
+      url: `/stations/${stationId}/credentials/rotate`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.headers['cache-control']).toBe('no-store');
+    expect(rotated.json().credentials.password).toMatch(/^rotated-/u);
+
+    for (const token of ['managerA', 'viewerA']) {
+      const denied = await app.inject({
+        method: 'POST',
+        url: `/stations/${stationId}/credentials/rotate`,
+        headers: { ...auth(token), 'x-tenant-id': IDS.tenantA },
+      });
+      expect(denied.statusCode, token).toBe(403);
+    }
+
+    const audit = await db.superuser.query(
+      'SELECT action FROM app.audit_log WHERE resource_id = $1 ORDER BY id',
+      [stationId],
+    );
+    expect(audit.rows.map((row) => row.action)).toContain('station.credentials_rotated');
+  });
+
+  it('paginates stations by station_ref and id with a real cursor', async () => {
+    for (const suffix of ['810', '811', '812']) {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/stations',
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        payload: {
+          site_id: IDS.siteA1,
+          station_ref: `ACME-BLR-${suffix}`,
+          latitude: 12.97,
+          longitude: 77.59,
+        },
+      });
+      expect(created.statusCode).toBe(201);
+    }
+    const first = await app.inject({
+      method: 'GET',
+      url: '/stations?limit=2',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().stations).toHaveLength(2);
+    expect(first.json().next_cursor).toBeTruthy();
+    const second = await app.inject({
+      method: 'GET',
+      url: `/stations?limit=2&cursor=${encodeURIComponent(first.json().next_cursor)}`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(
+      second.json().stations.map((station: { station_ref: string }) => station.station_ref),
+    ).toEqual(['ACME-BLR-812']);
+    expect(second.json().next_cursor).toBeNull();
+  });
+
+  it('retries registration for a failed station (tenant admin only)', async () => {
+    const stationId = '30000000-0000-4000-8000-000000000099';
+    await db.superuser.query(
+      `INSERT INTO app.stations (id, tenant_id, site_id, org_code, station_ref, registration_status)
+       VALUES ($1, $2, $3, 'ACME', 'ACME-BLR-899', 'registration_failed')`,
+      [stationId, IDS.tenantA, IDS.siteA1],
+    );
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/stations/${stationId}/register/retry`,
+      headers: { ...auth('managerA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(denied.statusCode).toBe(403);
+    const retried = await app.inject({
+      method: 'POST',
+      url: `/stations/${stationId}/register/retry`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().station.registration_status).toBe('registered');
+    expect(retried.json().credentials.password).toMatch(/^fake-/u);
+  });
+
+  it('rejects a concurrent rotation while another holds the station lock', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: {
+        site_id: IDS.siteA1,
+        station_ref: 'ACME-BLR-803',
+        latitude: 12.97,
+        longitude: 77.59,
+      },
+    });
+    const stationId = created.json().station.id as string;
+    const rotate = () =>
+      app.inject({
+        method: 'POST',
+        url: `/stations/${stationId}/credentials/rotate`,
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      });
+    const [a, b] = await Promise.all([rotate(), rotate()]);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+    const busy = a.statusCode === 409 ? a : b;
+    expect(busy.json().error.code).toBe('ROTATION_IN_PROGRESS');
+  });
+
+  it('retries a pending state-recording failure and rejects decommissioned/provisioned states', async () => {
+    const pendingId = '30000000-0000-4000-8000-000000000098';
+    const decommissionedId = '30000000-0000-4000-8000-000000000097';
+    await db.superuser.query(
+      `INSERT INTO app.stations (id, tenant_id, site_id, org_code, station_ref, registration_status)
+       VALUES ($1, $2, $3, 'ACME', 'ACME-BLR-898', 'pending'),
+              ($4, $2, $3, 'ACME', 'ACME-BLR-897', 'decommissioned')`,
+      [pendingId, IDS.tenantA, IDS.siteA1, decommissionedId],
+    );
+    const recovered = await app.inject({
+      method: 'POST',
+      url: `/stations/${pendingId}/register/retry`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json().station.registration_status).toBe('registered');
+    const blocked = await app.inject({
+      method: 'POST',
+      url: `/stations/${decommissionedId}/register/retry`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(blocked.statusCode).toBe(409);
+    const state = await db.superuser.query<{ registration_status: string }>(
+      'SELECT registration_status FROM app.stations WHERE id = $1',
+      [decommissionedId],
+    );
+    expect(state.rows[0]?.registration_status).toBe('decommissioned');
+  });
+
+  it('returns ROTATION_IN_PROGRESS while another advisory lock is held', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: {
+        site_id: IDS.siteA1,
+        station_ref: 'ACME-BLR-806',
+        latitude: 12.97,
+        longitude: 77.59,
+      },
+    });
+    const stationId = created.json().station.id as string;
+    const stationRef = 'ACME-BLR-806';
+    await db.superuser.query('SELECT pg_advisory_lock(hashtext($1))', [stationRef]);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/stations/${stationId}/credentials/rotate`,
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.code).toBe('ROTATION_IN_PROGRESS');
+    } finally {
+      await db.superuser.query('SELECT pg_advisory_unlock(hashtext($1))', [stationRef]);
+    }
+  });
+
+  it('keeps a registered station registered when only password provisioning fails', async () => {
+    const adapter = createFakeCsmsAdapter();
+    const failing = adapter as CsmsAdapter & {
+      provisionPassword: () => Promise<string>;
+    };
+    failing.provisionPassword = async () => {
+      throw new CsmsError('credential failure', 'CSMS_UNAVAILABLE');
+    };
+    const failingApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: failing,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const response = await failingApp.inject({
+        method: 'POST',
+        url: '/stations',
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        payload: {
+          site_id: IDS.siteA1,
+          station_ref: 'ACME-BLR-804',
+          latitude: 12.97,
+          longitude: 77.59,
+        },
+      });
+      expect(response.statusCode).toBe(502);
+      const { rows } = await db.superuser.query<{
+        registration_status: string;
+        credentials_state: string;
+      }>('SELECT registration_status, credentials_state FROM app.stations WHERE station_ref = $1', [
+        'ACME-BLR-804',
+      ]);
+      expect(rows[0]).toEqual({
+        registration_status: 'registered',
+        credentials_state: 'rotation_incomplete',
+      });
+    } finally {
+      await failingApp.close();
+    }
+  });
+
+  it('marks registration_failed when the CSMS registration step fails', async () => {
+    const adapter = createFakeCsmsAdapter();
+    const failing = adapter as CsmsAdapter & {
+      registerStation: CsmsAdapter['registerStation'];
+    };
+    failing.registerStation = async () => {
+      throw new CsmsError('registration conflict', 'CSMS_CONFLICT');
+    };
+    const failingApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: failing,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const response = await failingApp.inject({
+        method: 'POST',
+        url: '/stations',
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        payload: {
+          site_id: IDS.siteA1,
+          station_ref: 'ACME-BLR-805',
+          latitude: 12.97,
+          longitude: 77.59,
+        },
+      });
+      expect(response.statusCode).toBe(409);
+      const { rows } = await db.superuser.query<{
+        registration_status: string;
+        registration_error: string;
+      }>(
+        'SELECT registration_status, registration_error FROM app.stations WHERE station_ref = $1',
+        ['ACME-BLR-805'],
+      );
+      expect(rows[0]).toEqual({
+        registration_status: 'registration_failed',
+        registration_error: 'CSMS_CONFLICT',
+      });
+    } finally {
+      await failingApp.close();
+    }
+  });
+
+  it('denies site managers station creation before any CitrineOS call', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('managerA'), 'x-tenant-id': IDS.tenantA },
+      payload: {
+        site_id: IDS.siteA1,
+        station_ref: 'ACME-BLR-802',
+        latitude: 12.97,
+        longitude: 77.59,
+      },
+    });
+    expect(response.statusCode).toBe(403);
   });
 });

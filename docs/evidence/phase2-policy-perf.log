@@ -1,0 +1,378 @@
+phase2-perf: seeding 1,000,000 sessions
+phase2-perf: sessions seeded in 120686ms
+phase2-perf: seeding 1,000,000 meter values
+phase2-perf: meter values seeded in 90686ms
+phase2-perf: seeding 1,000,000 status events
+phase2-perf: status events seeded in 82500ms
+
+=== tenant_admin sessions (14ms) ===
+Limit  (cost=1.47..16.41 rows=51 width=48) (actual time=7.962..8.000 rows=51 loops=1)
+  Buffers: shared hit=378
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=5.050..5.050 rows=1 loops=1)
+          Buffers: shared hit=348
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.867..2.867 rows=1 loops=1)
+          Buffers: shared hit=25
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Result  (cost=0.42..133957.03 rows=457030 width=48) (actual time=7.960..7.991 rows=51 loops=1)
+        One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+        Buffers: shared hit=378
+        ->  Index Scan using sessions_tenant_started_idx on sessions  (cost=0.42..133957.03 rows=457030 width=48) (actual time=2.905..2.923 rows=51 loops=1)
+              Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (started_at < '2027-02-01 00:00:00+00'::timestamp with time zone))
+              Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+              Buffers: shared hit=30
+Planning:
+  Buffers: shared hit=292
+Planning Time: 1.778 ms
+Execution Time: 8.103 ms
+
+=== tenant_admin session_meter_values (11ms) ===
+Limit  (cost=1.95..15.74 rows=51 width=40) (actual time=5.729..5.813 rows=51 loops=1)
+  Buffers: shared hit=29
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.658..1.659 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.984..3.984 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Merge Append  (cost=0.91..123365.11 rows=456085 width=40) (actual time=5.727..5.797 rows=51 loops=1)
+        Sort Key: session_meter_values.csms_timestamp DESC, session_meter_values.id DESC
+        Buffers: shared hit=29
+        ->  Result  (cost=0.42..116499.25 rows=456082 width=40) (actual time=5.700..5.757 rows=51 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=23
+              ->  Index Scan using session_meter_values_2026_11_tenant_id_csms_timestamp_id_idx on session_meter_values_2026_11 session_meter_values_1  (cost=0.42..116499.25 rows=456082 width=40) (actual time=4.035..4.079 rows=51 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=18
+        ->  Result  (cost=0.15..8.18 rows=1 width=40) (actual time=0.011..0.011 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using session_meter_values_2026_12_tenant_id_csms_timestamp_id_idx on session_meter_values_2026_12 session_meter_values_2  (cost=0.15..8.18 rows=1 width=40) (actual time=0.009..0.009 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.15..8.18 rows=1 width=40) (actual time=0.007..0.007 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using session_meter_values_2027_01_tenant_id_csms_timestamp_id_idx on session_meter_values_2027_01 session_meter_values_3  (cost=0.15..8.18 rows=1 width=40) (actual time=0.006..0.006 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.15..8.18 rows=1 width=40) (actual time=0.007..0.007 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using session_meter_values_default_tenant_id_csms_timestamp_id_idx on session_meter_values_default session_meter_values_4  (cost=0.15..8.18 rows=1 width=40) (actual time=0.005..0.005 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=736
+Planning Time: 2.669 ms
+Execution Time: 5.943 ms
+
+=== tenant_admin station_status_events (9ms) ===
+Limit  (cost=1.88..15.67 rows=51 width=42) (actual time=3.916..3.974 rows=51 loops=1)
+  Buffers: shared hit=29
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.130..1.131 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.727..2.727 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Merge Append  (cost=0.84..123546.27 rows=457015 width=42) (actual time=3.914..3.964 rows=51 loops=1)
+        Sort Key: station_status_events.csms_timestamp DESC, station_status_events.id DESC
+        Buffers: shared hit=29
+        ->  Result  (cost=0.42..116666.53 rows=457012 width=42) (actual time=3.897..3.939 rows=51 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=23
+              ->  Index Scan using station_status_events_2026_11_tenant_id_csms_timestamp_id_idx on station_status_events_2026_11 station_status_events_1  (cost=0.42..116666.53 rows=457012 width=42) (actual time=2.763..2.796 rows=51 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=18
+        ->  Result  (cost=0.12..8.16 rows=1 width=64) (actual time=0.007..0.007 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using station_status_events_2026_12_tenant_id_csms_timestamp_id_idx on station_status_events_2026_12 station_status_events_2  (cost=0.12..8.16 rows=1 width=64) (actual time=0.006..0.006 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.12..8.16 rows=1 width=64) (actual time=0.004..0.004 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using station_status_events_2027_01_tenant_id_csms_timestamp_id_idx on station_status_events_2027_01 station_status_events_3  (cost=0.12..8.16 rows=1 width=64) (actual time=0.003..0.004 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.12..8.16 rows=1 width=64) (actual time=0.004..0.005 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using station_status_events_default_tenant_id_csms_timestamp_id_idx on station_status_events_default station_status_events_4  (cost=0.12..8.16 rows=1 width=64) (actual time=0.003..0.004 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=652
+Planning Time: 2.754 ms
+Execution Time: 4.062 ms
+
+=== tenant_admin stations (11ms) ===
+Limit  (cost=3.83..66.52 rows=51 width=49) (actual time=7.407..7.495 rows=51 loops=1)
+  Buffers: shared hit=201
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.073..1.073 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.658..2.658 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 5 (returns $4)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=0.923..0.923 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 6 (returns $5)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.488..2.488 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 7 (returns $6)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  InitPlan 8 (returns $7)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (never executed)
+  ->  Incremental Sort  (cost=1.75..313.98 rows=254 width=49) (actual time=7.405..7.484 rows=51 loops=1)
+        Sort Key: s.station_ref, s.id
+        Presorted Key: s.station_ref
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+        Buffers: shared hit=201
+        ->  Nested Loop Left Join  (cost=0.55..302.55 rows=254 width=49) (actual time=7.193..7.396 rows=52 loops=1)
+              Buffers: shared hit=195
+              ->  Index Scan using stations_station_ref_key on stations s  (cost=0.28..79.81 rows=254 width=31) (actual time=3.754..3.776 rows=52 loops=1)
+                    Filter: ((tenant_id = $0) AND ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3))))
+                    Buffers: shared hit=21
+              ->  Index Scan using station_runtime_state_pkey on station_runtime_state r  (cost=0.28..0.88 rows=1 width=34) (actual time=0.069..0.069 rows=1 loops=52)
+                    Index Cond: (station_id = s.id)
+                    Filter: ((tenant_id = $4) AND ($5 OR ($6 = 'viewer'::text) OR (site_id = ANY ($7))))
+                    Buffers: shared hit=174
+Planning:
+  Buffers: shared hit=191
+Planning Time: 1.138 ms
+Execution Time: 7.561 ms
+
+=== site_manager sessions (62ms) ===
+Limit  (cost=1.47..16.41 rows=51 width=48) (actual time=14.874..55.538 rows=51 loops=1)
+  Buffers: shared hit=504 read=1887
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=4.224..4.224 rows=1 loops=1)
+          Buffers: shared hit=348
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.812..2.813 rows=1 loops=1)
+          Buffers: shared hit=25
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=2.193..2.194 rows=1 loops=1)
+          Buffers: shared hit=12
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=5.596..5.597 rows=1 loops=1)
+          Buffers: shared hit=114 read=6
+  ->  Result  (cost=0.42..133957.03 rows=457030 width=48) (actual time=14.872..55.511 rows=51 loops=1)
+        One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+        Buffers: shared hit=504 read=1887
+        ->  Index Scan using sessions_tenant_started_idx on sessions  (cost=0.42..133957.03 rows=457030 width=48) (actual time=10.642..51.239 rows=51 loops=1)
+              Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (started_at < '2027-02-01 00:00:00+00'::timestamp with time zone))
+              Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+              Rows Removed by Filter: 49950
+              Buffers: shared hit=156 read=1887
+Planning:
+  Buffers: shared hit=292
+Planning Time: 2.233 ms
+Execution Time: 55.677 ms
+
+=== site_manager session_meter_values (53ms) ===
+Limit  (cost=1.95..15.74 rows=51 width=40) (actual time=10.657..46.478 rows=51 loops=1)
+  Buffers: shared hit=67 read=1557 written=18
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.484..1.485 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.649..2.650 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=2.112..2.113 rows=1 loops=1)
+          Buffers: shared hit=12
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=4.343..4.344 rows=1 loops=1)
+          Buffers: shared hit=26
+  ->  Merge Append  (cost=0.91..123365.11 rows=456085 width=40) (actual time=10.655..46.457 rows=51 loops=1)
+        Sort Key: session_meter_values.csms_timestamp DESC, session_meter_values.id DESC
+        Buffers: shared hit=67 read=1557 written=18
+        ->  Result  (cost=0.42..116499.25 rows=456082 width=40) (actual time=10.637..46.417 rows=51 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=61 read=1557 written=18
+              ->  Index Scan using session_meter_values_2026_11_tenant_id_csms_timestamp_id_idx on session_meter_values_2026_11 session_meter_values_1  (cost=0.42..116499.25 rows=456082 width=40) (actual time=9.148..44.905 rows=51 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Rows Removed by Filter: 49950
+                    Buffers: shared hit=56 read=1557 written=18
+        ->  Result  (cost=0.15..8.18 rows=1 width=40) (actual time=0.007..0.008 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using session_meter_values_2026_12_tenant_id_csms_timestamp_id_idx on session_meter_values_2026_12 session_meter_values_2  (cost=0.15..8.18 rows=1 width=40) (actual time=0.006..0.006 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.15..8.18 rows=1 width=40) (actual time=0.004..0.005 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using session_meter_values_2027_01_tenant_id_csms_timestamp_id_idx on session_meter_values_2027_01 session_meter_values_3  (cost=0.15..8.18 rows=1 width=40) (actual time=0.003..0.003 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.15..8.18 rows=1 width=40) (actual time=0.005..0.005 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using session_meter_values_default_tenant_id_csms_timestamp_id_idx on session_meter_values_default session_meter_values_4  (cost=0.15..8.18 rows=1 width=40) (actual time=0.004..0.004 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=736
+Planning Time: 4.060 ms
+Execution Time: 46.659 ms
+
+=== site_manager station_status_events (51ms) ===
+Limit  (cost=1.88..15.67 rows=51 width=42) (actual time=11.034..45.335 rows=51 loops=1)
+  Buffers: shared hit=1087 read=537
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.252..1.253 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=3.097..3.098 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=2.065..2.066 rows=1 loops=1)
+          Buffers: shared hit=12
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=4.551..4.551 rows=1 loops=1)
+          Buffers: shared hit=26
+  ->  Merge Append  (cost=0.84..123546.27 rows=457015 width=42) (actual time=11.032..45.308 rows=51 loops=1)
+        Sort Key: station_status_events.csms_timestamp DESC, station_status_events.id DESC
+        Buffers: shared hit=1087 read=537
+        ->  Result  (cost=0.42..116666.53 rows=457012 width=42) (actual time=11.016..45.267 rows=51 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=1081 read=537
+              ->  Index Scan using station_status_events_2026_11_tenant_id_csms_timestamp_id_idx on station_status_events_2026_11 station_status_events_1  (cost=0.42..116666.53 rows=457012 width=42) (actual time=9.759..43.985 rows=51 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Rows Removed by Filter: 49950
+                    Buffers: shared hit=1076 read=537
+        ->  Result  (cost=0.12..8.16 rows=1 width=64) (actual time=0.006..0.007 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using station_status_events_2026_12_tenant_id_csms_timestamp_id_idx on station_status_events_2026_12 station_status_events_2  (cost=0.12..8.16 rows=1 width=64) (actual time=0.005..0.006 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.12..8.16 rows=1 width=64) (actual time=0.004..0.004 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using station_status_events_2027_01_tenant_id_csms_timestamp_id_idx on station_status_events_2027_01 station_status_events_3  (cost=0.12..8.16 rows=1 width=64) (actual time=0.003..0.003 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+        ->  Result  (cost=0.12..8.16 rows=1 width=64) (actual time=0.004..0.005 rows=0 loops=1)
+              One-Time Filter: ($0 = '10000000-0000-4000-8000-000000000001'::uuid)
+              Buffers: shared hit=2
+              ->  Index Scan using station_status_events_default_tenant_id_csms_timestamp_id_idx on station_status_events_default station_status_events_4  (cost=0.12..8.16 rows=1 width=64) (actual time=0.003..0.004 rows=0 loops=1)
+                    Index Cond: ((tenant_id = '10000000-0000-4000-8000-000000000001'::uuid) AND (csms_timestamp < '2027-02-01 00:00:00+00'::timestamp with time zone))
+                    Filter: ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3)))
+                    Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=652
+Planning Time: 3.231 ms
+Execution Time: 45.428 ms
+
+=== site_manager stations (24ms) ===
+Limit  (cost=3.83..66.52 rows=51 width=49) (actual time=20.914..20.920 rows=1 loops=1)
+  Buffers: shared hit=125 read=21
+  InitPlan 1 (returns $0)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=1.022..1.022 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 2 (returns $1)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.393..2.394 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 3 (returns $2)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=1.973..1.973 rows=1 loops=1)
+          Buffers: shared hit=12
+  InitPlan 4 (returns $3)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=4.649..4.649 rows=1 loops=1)
+          Buffers: shared hit=26
+  InitPlan 5 (returns $4)
+    ->  Result  (cost=0.00..0.26 rows=1 width=16) (actual time=0.873..0.874 rows=1 loops=1)
+          Buffers: shared hit=5
+  InitPlan 6 (returns $5)
+    ->  Result  (cost=0.00..0.26 rows=1 width=1) (actual time=2.457..2.457 rows=1 loops=1)
+          Buffers: shared hit=13
+  InitPlan 7 (returns $6)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=2.344..2.344 rows=1 loops=1)
+          Buffers: shared hit=12
+  InitPlan 8 (returns $7)
+    ->  Result  (cost=0.00..0.26 rows=1 width=32) (actual time=4.500..4.501 rows=1 loops=1)
+          Buffers: shared hit=26
+  ->  Incremental Sort  (cost=1.75..313.98 rows=254 width=49) (actual time=20.913..20.914 rows=1 loops=1)
+        Sort Key: s.station_ref, s.id
+        Presorted Key: s.station_ref
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB
+        Buffers: shared hit=125 read=21
+        ->  Nested Loop Left Join  (cost=0.55..302.55 rows=254 width=49) (actual time=20.269..20.876 rows=1 loops=1)
+              Buffers: shared hit=119 read=21
+              ->  Index Scan using stations_station_ref_key on stations s  (cost=0.28..79.81 rows=254 width=31) (actual time=10.062..10.668 rows=1 loops=1)
+                    Filter: ((tenant_id = $0) AND ($1 OR ($2 = 'viewer'::text) OR (site_id = ANY ($3))))
+                    Rows Removed by Filter: 1000
+                    Buffers: shared hit=60 read=21
+              ->  Index Scan using station_runtime_state_pkey on station_runtime_state r  (cost=0.28..0.88 rows=1 width=34) (actual time=10.202..10.203 rows=1 loops=1)
+                    Index Cond: (station_id = s.id)
+                    Filter: ((tenant_id = $4) AND ($5 OR ($6 = 'viewer'::text) OR (site_id = ANY ($7))))
+                    Buffers: shared hit=59
+Planning:
+  Buffers: shared hit=191
+Planning Time: 1.006 ms
+Execution Time: 20.984 ms
+
+=== partition maintenance with one default-partition row (local dev, UTC) ===
+Timing is on.
+INSERT 0 1
+Time: 3.899 ms
+ ensure_event_partition 
+------------------------
+ 
+(1 row)
+
+Time: 30.613 ms
+ count 
+-------
+     0
+(1 row)
+
+Time: 0.922 ms
+Timing is off.
+
+=== notes ===
+Dataset: 1,000,001 sessions (900k Acme + 100k Beta + seeds), 1,000,000 meter values,
+1,000,000 status events across 2026-11..2027-01; 1,000 Acme sites plus the Beta site.
+The site-manager actor holds 1 of 1,000 Acme sites. Site-manager queries are slower
+because the RLS predicate filters the shared tenant index scan; this is the expected
+RLS skew limit (observed ~45-56 ms at the 1M-row partition). Tenant-admin keyset
+queries stay under ~8 ms.
+Partition maintenance with a row in the default partition: create/move/attach ~31 ms
+for ingestion_events (one row); see the timing section above.

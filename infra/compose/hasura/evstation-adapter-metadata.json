@@ -1,0 +1,584 @@
+{
+  "role": "evstation_adapter",
+  "tables": {
+    "Locations": {
+      "table": {
+        "name": "Locations"
+      },
+      "select_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "id",
+              "name",
+              "address",
+              "city",
+              "postalCode",
+              "state",
+              "country",
+              "coordinates",
+              "timeZone",
+              "parkingType",
+              "facilities",
+              "openingHours",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        },
+        {
+          "role": "evstation_reader",
+          "permission": {
+            "columns": [
+              "id",
+              "name",
+              "address",
+              "city",
+              "postalCode",
+              "state",
+              "country",
+              "coordinates",
+              "timeZone",
+              "parkingType",
+              "facilities",
+              "openingHours",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        }
+      ],
+      "insert_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "name",
+              "address",
+              "city",
+              "postalCode",
+              "state",
+              "country",
+              "coordinates",
+              "timeZone",
+              "parkingType",
+              "facilities",
+              "openingHours",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "check": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            }
+          }
+        }
+      ],
+      "update_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "name",
+              "address",
+              "city",
+              "postalCode",
+              "state",
+              "country",
+              "coordinates",
+              "timeZone",
+              "parkingType",
+              "facilities",
+              "openingHours",
+              "updatedAt"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "check": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            }
+          }
+        }
+      ],
+      "delete_permissions": []
+    },
+    "ChargingStations": {
+      "table": {
+        "name": "ChargingStations"
+      },
+      "select_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "id",
+              "ocppConnectionName",
+              "isOnline",
+              "protocol",
+              "chargePointVendor",
+              "chargePointModel",
+              "chargePointSerialNumber",
+              "chargeBoxSerialNumber",
+              "firmwareVersion",
+              "locationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt",
+              "lastConnectedAt",
+              "capabilities"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        },
+        {
+          "role": "evstation_reader",
+          "permission": {
+            "columns": [
+              "id",
+              "ocppConnectionName",
+              "isOnline",
+              "protocol",
+              "chargePointVendor",
+              "chargePointModel",
+              "chargePointSerialNumber",
+              "chargeBoxSerialNumber",
+              "firmwareVersion",
+              "locationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt",
+              "lastConnectedAt",
+              "capabilities"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        }
+      ],
+      "insert_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "ocppConnectionName",
+              "protocol",
+              "chargePointVendor",
+              "chargePointModel",
+              "chargePointSerialNumber",
+              "chargeBoxSerialNumber",
+              "firmwareVersion",
+              "locationId",
+              "tenantId",
+              "use16StatusNotification0",
+              "createdAt",
+              "updatedAt"
+            ],
+            "check": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "capabilities": {
+                    "_contains": {
+                      "evstation_managed": true
+                    }
+                  }
+                }
+              ]
+            },
+            "set": {
+              "capabilities": {
+                "evstation_managed": true
+              }
+            }
+          }
+        }
+      ],
+      "update_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "protocol",
+              "chargePointVendor",
+              "chargePointModel",
+              "chargePointSerialNumber",
+              "chargeBoxSerialNumber",
+              "firmwareVersion",
+              "locationId",
+              "use16StatusNotification0",
+              "updatedAt"
+            ],
+            "filter": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "capabilities": {
+                    "_contains": {
+                      "evstation_managed": true
+                    }
+                  }
+                }
+              ]
+            },
+            "check": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "capabilities": {
+                    "_contains": {
+                      "evstation_managed": true
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "delete_permissions": []
+    },
+    "Evses": {
+      "table": {
+        "name": "Evses"
+      },
+      "select_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "id",
+              "evseId",
+              "physicalReference",
+              "removed",
+              "stationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        },
+        {
+          "role": "evstation_reader",
+          "permission": {
+            "columns": [
+              "id",
+              "evseId",
+              "physicalReference",
+              "removed",
+              "stationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        }
+      ],
+      "insert_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "evseId",
+              "physicalReference",
+              "stationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "check": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "ChargingStation": {
+                    "capabilities": {
+                      "_contains": {
+                        "evstation_managed": true
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "update_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": ["evseId", "physicalReference", "updatedAt"],
+            "filter": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "ChargingStation": {
+                    "capabilities": {
+                      "_contains": {
+                        "evstation_managed": true
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "check": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "ChargingStation": {
+                    "capabilities": {
+                      "_contains": {
+                        "evstation_managed": true
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "delete_permissions": []
+    },
+    "Connectors": {
+      "table": {
+        "name": "Connectors"
+      },
+      "select_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "id",
+              "connectorId",
+              "status",
+              "errorCode",
+              "timestamp",
+              "info",
+              "vendorId",
+              "vendorErrorCode",
+              "type",
+              "format",
+              "powerType",
+              "maximumAmperage",
+              "maximumVoltage",
+              "maximumPowerWatts",
+              "termsAndConditionsUrl",
+              "evseId",
+              "evseTypeConnectorId",
+              "stationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        },
+        {
+          "role": "evstation_reader",
+          "permission": {
+            "columns": [
+              "id",
+              "connectorId",
+              "status",
+              "errorCode",
+              "timestamp",
+              "info",
+              "vendorId",
+              "vendorErrorCode",
+              "type",
+              "format",
+              "powerType",
+              "maximumAmperage",
+              "maximumVoltage",
+              "maximumPowerWatts",
+              "termsAndConditionsUrl",
+              "evseId",
+              "evseTypeConnectorId",
+              "stationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "filter": {
+              "tenantId": {
+                "_eq": "x-hasura-tenant-id"
+              }
+            },
+            "allow_aggregations": true
+          }
+        }
+      ],
+      "insert_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "connectorId",
+              "status",
+              "errorCode",
+              "timestamp",
+              "type",
+              "format",
+              "powerType",
+              "maximumAmperage",
+              "maximumVoltage",
+              "maximumPowerWatts",
+              "termsAndConditionsUrl",
+              "evseId",
+              "evseTypeConnectorId",
+              "stationId",
+              "tenantId",
+              "createdAt",
+              "updatedAt"
+            ],
+            "check": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "ChargingStation": {
+                    "capabilities": {
+                      "_contains": {
+                        "evstation_managed": true
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "update_permissions": [
+        {
+          "role": "evstation_adapter",
+          "permission": {
+            "columns": [
+              "type",
+              "format",
+              "powerType",
+              "maximumAmperage",
+              "maximumVoltage",
+              "maximumPowerWatts",
+              "termsAndConditionsUrl",
+              "updatedAt"
+            ],
+            "filter": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "ChargingStation": {
+                    "capabilities": {
+                      "_contains": {
+                        "evstation_managed": true
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "check": {
+              "_and": [
+                {
+                  "tenantId": {
+                    "_eq": "x-hasura-tenant-id"
+                  }
+                },
+                {
+                  "ChargingStation": {
+                    "capabilities": {
+                      "_contains": {
+                        "evstation_managed": true
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "delete_permissions": []
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
+import { createFakeCsmsAdapter, type CsmsAdapter } from '@evstation/csms-adapter';
 import swaggerUi from '@fastify/swagger-ui';
 import Fastify, {
   LogController,
@@ -38,6 +39,7 @@ export interface BuildAppOptions {
   config: ApiConfig;
   verifier: TokenVerifier;
   mailer?: Mailer;
+  adapter?: CsmsAdapter;
   rateLimit?: { max?: number; ipMax?: number; timeWindow?: number };
   logger?: boolean;
   logStream?: NodeJS.WritableStream;
@@ -60,6 +62,7 @@ function isPublicPath(pathname: string): boolean {
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const { db, config, verifier } = options;
   const mailer = options.mailer ?? new MemoryMailer();
+  const adapter = options.adapter ?? createFakeCsmsAdapter();
   if (config.nodeEnv === 'production' && !options.mailer) {
     throw new Error('a mailer is required in production');
   }
@@ -217,6 +220,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           tenantId,
           config,
           mailer,
+          adapter,
           afterCommit: (task) => afterCommitTasks.push(task),
         });
       });

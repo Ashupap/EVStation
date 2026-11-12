@@ -38,6 +38,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@evstation/csms-adapter':
+        specifier: workspace:*
+        version: link:../../packages/csms-adapter
       '@evstation/db':
         specifier: workspace:*
         version: link:../../packages/db

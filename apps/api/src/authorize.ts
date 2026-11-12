@@ -18,7 +18,11 @@ export type Capability =
   | 'invitation.create'
   | 'invitation.revoke'
   | 'invitation.accept'
-  | 'audit.read';
+  | 'audit.read'
+  | 'station.read'
+  | 'station.create'
+  | 'station.update'
+  | 'station.credentials.rotate';
 
 export interface Resource {
   tenantId?: string;
@@ -61,6 +65,13 @@ export function authorize(
       if (role === 'tenant_admin' || role === 'platform_admin') return true;
       if (role !== 'site_manager' || !resource.siteId) return false;
       return membershipFor(principal, tenantId)?.siteIds.includes(resource.siteId) === true;
+    case 'station.read':
+      return role !== null;
+    case 'station.update':
+      return role === 'tenant_admin' || role === 'platform_admin' || role === 'site_manager';
+    case 'station.create':
+    case 'station.credentials.rotate':
+      return role === 'tenant_admin' || role === 'platform_admin';
     case 'user.read':
     case 'user.role.update':
     case 'invitation.read':

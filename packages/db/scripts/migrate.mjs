@@ -14,7 +14,16 @@ import { dbCredentials, isCliEntry, migrationFiles } from './lib.mjs';
 
 const LOCK_KEY = 8242001;
 
-export async function migrate({ migratorUrl, ownerPassword, appPassword, log = () => {} }) {
+/**
+ * @param {{migratorUrl: string, ownerPassword: string, appPassword: string, untilFile?: string, log?: (line: string) => void}} options
+ */
+export async function migrate({
+  migratorUrl,
+  ownerPassword,
+  appPassword,
+  untilFile = undefined,
+  log = () => {},
+}) {
   if (!ownerPassword || !appPassword) {
     throw new Error('migrate requires ownerPassword and appPassword');
   }
@@ -56,6 +65,7 @@ export async function migrate({ migratorUrl, ownerPassword, appPassword, log = (
     }
 
     for (const { file, sql, checksum } of migrations) {
+      if (untilFile && file > untilFile) break;
       if (applied.has(file)) continue;
       log(`applying ${file}`);
       await client.query('BEGIN');

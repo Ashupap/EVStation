@@ -112,6 +112,8 @@ function ensureEnv() {
     KC_BOOTSTRAP_ADMIN_USERNAME: 'dev_admin',
     KC_BOOTSTRAP_ADMIN_PASSWORD: secret(),
     KC_DASHBOARD_CLIENT_SECRET: secret(),
+    KC_CSMS_PROVISIONER_CLIENT_SECRET: secret(),
+    KC_CSMS_READER_CLIENT_SECRET: secret(),
     DASHBOARD_SESSION_SECRET: secret(),
     HASURA_ADMIN_SECRET: secret(),
     CITRINE_HTTP_HOST_PORT: '8088',
@@ -258,8 +260,19 @@ switch (command) {
       stdio: 'inherit',
     });
     if (seed.status !== 0) {
-      console.error('dev-stack: Keycloak dashboard client seeding failed');
+      console.error('dev-stack: Keycloak client seeding failed');
       process.exit(seed.status ?? 1);
+    }
+    const overlay = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'scripts/apply-hasura-overlay.mjs')],
+      {
+        stdio: 'inherit',
+      },
+    );
+    if (overlay.status !== 0) {
+      console.error('dev-stack: Hasura adapter overlay failed');
+      process.exit(overlay.status ?? 1);
     }
     ensureDashboardEnv();
     console.log('dev-stack: stack is up. See docs/RUNBOOK.md for the port map.');

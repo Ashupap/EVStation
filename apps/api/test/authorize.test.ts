@@ -46,6 +46,10 @@ const capabilities: Capability[] = [
   'invitation.revoke',
   'invitation.accept',
   'audit.read',
+  'station.read',
+  'station.create',
+  'station.update',
+  'station.credentials.rotate',
 ];
 
 describe('permission matrix (one assertion per role per capability)', () => {
@@ -73,6 +77,10 @@ describe('permission matrix (one assertion per role per capability)', () => {
       'invitation.revoke',
       'invitation.accept',
       'audit.read',
+      'station.read',
+      'station.create',
+      'station.update',
+      'station.credentials.rotate',
     ]);
     for (const capability of capabilities) {
       expect(authorize(principal('tenant_admin'), TENANT, capability, { siteId: OTHER_SITE })).toBe(
@@ -88,6 +96,8 @@ describe('permission matrix (one assertion per role per capability)', () => {
       'site.read',
       'site.update',
       'invitation.accept',
+      'station.read',
+      'station.update',
     ]);
     for (const capability of capabilities) {
       expect(authorize(principal('site_manager'), TENANT, capability, { siteId: SITE })).toBe(
@@ -101,7 +111,13 @@ describe('permission matrix (one assertion per role per capability)', () => {
   });
 
   it('viewer is read-only for sites', () => {
-    const allowed = new Set<Capability>(['me.read', 'me.update', 'site.read', 'invitation.accept']);
+    const allowed = new Set<Capability>([
+      'me.read',
+      'me.update',
+      'site.read',
+      'invitation.accept',
+      'station.read',
+    ]);
     for (const capability of capabilities) {
       expect(authorize(principal('viewer'), TENANT, capability)).toBe(allowed.has(capability));
     }

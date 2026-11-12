@@ -38,6 +38,15 @@ const apiEnv = {
   OIDC_ISSUER: 'http://localhost:8180/realms/evstation',
   OIDC_AUDIENCE: 'evstation-api',
   INVITATION_ACCEPT_BASE_URL: 'http://localhost:3200/invitations/accept',
+  CSMS_BASE_URL: 'http://localhost:8088',
+  CSMS_HASURA_URL: 'http://localhost:8090/v1/graphql',
+  CSMS_AUTH_MODE: 'localDev',
+  CSMS_TOKEN_URL: 'http://localhost:8180/realms/evstation/protocol/openid-connect/token',
+  CSMS_TENANT_ID: '1',
+  CSMS_PROVISIONER_CLIENT_ID: 'csms-provisioner',
+  CSMS_PROVISIONER_CLIENT_SECRET: compose.KC_CSMS_PROVISIONER_CLIENT_SECRET ?? '',
+  CSMS_READER_CLIENT_ID: 'csms-reader',
+  CSMS_READER_CLIENT_SECRET: compose.KC_CSMS_READER_CLIENT_SECRET ?? '',
 };
 
 const dashboardEnv = {
