@@ -116,6 +116,7 @@ describe('restricted Hasura role for CitrineOS provisioning', () => {
     }
     for (const permission of rolePermission(stations, 'insert')) {
       expect(permission.permission.set).toEqual({ capabilities: { evstation_managed: true } });
+      expect(permission.permission.columns).not.toContain('capabilities');
     }
   });
 

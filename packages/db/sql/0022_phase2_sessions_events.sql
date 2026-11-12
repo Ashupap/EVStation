@@ -150,27 +150,27 @@ CREATE INDEX ingestion_events_station_time_idx
 -- partition so late/out-of-window events are never dropped. The maintenance job
 -- creates future monthly partitions; the default remains as a safety net.
 CREATE TABLE app.session_meter_values_2026_11 PARTITION OF app.session_meter_values
-  FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+  FOR VALUES FROM ('2026-11-01 00:00:00+00') TO ('2026-12-01 00:00:00+00');
 CREATE TABLE app.session_meter_values_2026_12 PARTITION OF app.session_meter_values
-  FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
+  FOR VALUES FROM ('2026-12-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
 CREATE TABLE app.session_meter_values_2027_01 PARTITION OF app.session_meter_values
-  FOR VALUES FROM ('2027-01-01') TO ('2027-02-01');
+  FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2027-02-01 00:00:00+00');
 CREATE TABLE app.session_meter_values_default PARTITION OF app.session_meter_values DEFAULT;
 
 CREATE TABLE app.station_status_events_2026_11 PARTITION OF app.station_status_events
-  FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+  FOR VALUES FROM ('2026-11-01 00:00:00+00') TO ('2026-12-01 00:00:00+00');
 CREATE TABLE app.station_status_events_2026_12 PARTITION OF app.station_status_events
-  FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
+  FOR VALUES FROM ('2026-12-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
 CREATE TABLE app.station_status_events_2027_01 PARTITION OF app.station_status_events
-  FOR VALUES FROM ('2027-01-01') TO ('2027-02-01');
+  FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2027-02-01 00:00:00+00');
 CREATE TABLE app.station_status_events_default PARTITION OF app.station_status_events DEFAULT;
 
 CREATE TABLE app.ingestion_events_2026_11 PARTITION OF app.ingestion_events
-  FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+  FOR VALUES FROM ('2026-11-01 00:00:00+00') TO ('2026-12-01 00:00:00+00');
 CREATE TABLE app.ingestion_events_2026_12 PARTITION OF app.ingestion_events
-  FOR VALUES FROM ('2026-12-01') TO ('2027-01-01');
+  FOR VALUES FROM ('2026-12-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');
 CREATE TABLE app.ingestion_events_2027_01 PARTITION OF app.ingestion_events
-  FOR VALUES FROM ('2027-01-01') TO ('2027-02-01');
+  FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2027-02-01 00:00:00+00');
 CREATE TABLE app.ingestion_events_default PARTITION OF app.ingestion_events DEFAULT;
 
 ALTER TABLE app.sessions ENABLE ROW LEVEL SECURITY;

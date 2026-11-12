@@ -89,7 +89,7 @@ async function waitFor(assertion: () => boolean | Promise<boolean>, timeoutMs = 
 
 beforeAll(async () => {
   db = await startDb();
-  apiDb = createDb(db.appUrl, 4);
+  apiDb = createDb(db.appUrl, 10);
   config.databaseUrlApp = db.appUrl;
   app = await buildApp({
     db: apiDb,
@@ -1586,7 +1586,7 @@ describe('station registration and credential rotation', () => {
     expect(retried.json().credentials.password).toMatch(/^fake-/u);
   });
 
-  it('serializes concurrent rotations for the same station', async () => {
+  it('rejects a concurrent rotation while another holds the station lock', async () => {
     const created = await app.inject({
       method: 'POST',
       url: '/stations',
@@ -1606,8 +1606,66 @@ describe('station registration and credential rotation', () => {
         headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
       });
     const [a, b] = await Promise.all([rotate(), rotate()]);
-    expect(a.statusCode).toBe(200);
-    expect(b.statusCode).toBe(200);
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+    const busy = a.statusCode === 409 ? a : b;
+    expect(busy.json().error.code).toBe('ROTATION_IN_PROGRESS');
+  });
+
+  it('retries a pending state-recording failure and rejects decommissioned/provisioned states', async () => {
+    const pendingId = '30000000-0000-4000-8000-000000000098';
+    const decommissionedId = '30000000-0000-4000-8000-000000000097';
+    await db.superuser.query(
+      `INSERT INTO app.stations (id, tenant_id, site_id, org_code, station_ref, registration_status)
+       VALUES ($1, $2, $3, 'ACME', 'ACME-BLR-898', 'pending'),
+              ($4, $2, $3, 'ACME', 'ACME-BLR-897', 'decommissioned')`,
+      [pendingId, IDS.tenantA, IDS.siteA1, decommissionedId],
+    );
+    const recovered = await app.inject({
+      method: 'POST',
+      url: `/stations/${pendingId}/register/retry`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json().station.registration_status).toBe('registered');
+    const blocked = await app.inject({
+      method: 'POST',
+      url: `/stations/${decommissionedId}/register/retry`,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(blocked.statusCode).toBe(409);
+    const state = await db.superuser.query<{ registration_status: string }>(
+      'SELECT registration_status FROM app.stations WHERE id = $1',
+      [decommissionedId],
+    );
+    expect(state.rows[0]?.registration_status).toBe('decommissioned');
+  });
+
+  it('returns ROTATION_IN_PROGRESS while another advisory lock is held', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/stations',
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      payload: {
+        site_id: IDS.siteA1,
+        station_ref: 'ACME-BLR-806',
+        latitude: 12.97,
+        longitude: 77.59,
+      },
+    });
+    const stationId = created.json().station.id as string;
+    const stationRef = 'ACME-BLR-806';
+    await db.superuser.query('SELECT pg_advisory_lock(hashtext($1))', [stationRef]);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/stations/${stationId}/credentials/rotate`,
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.code).toBe('ROTATION_IN_PROGRESS');
+    } finally {
+      await db.superuser.query('SELECT pg_advisory_unlock(hashtext($1))', [stationRef]);
+    }
   });
 
   it('keeps a registered station registered when only password provisioning fails', async () => {

@@ -459,3 +459,27 @@ describe('Phase 2 partition timezone', () => {
     }
   });
 });
+
+describe('Phase 2 legacy partition literals under non-UTC sessions', () => {
+  test('explicit +00 bounds route and deduplicate a November replay under Asia/Kolkata', async () => {
+    await db.superuser.query("SET timezone = 'Asia/Kolkata'");
+    try {
+      const insert = () =>
+        db.superuser.query(
+          `INSERT INTO app.station_status_events
+             (tenant_id, site_id, station_id, connector_id, status, csms_event_ref, csms_timestamp)
+           VALUES ($1, $2, $3, $4, 'available', 'legacy-partition-replay', '2026-11-30T23:30:00Z')`,
+          [A, SITE_A1, STATION_A1, CONNECTOR_A1],
+        );
+      await insert();
+      const { rows } = await db.superuser.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM app.station_status_events_2026_11
+         WHERE csms_event_ref = 'legacy-partition-replay'`,
+      );
+      expect(rows[0]?.n).toBe('1');
+      await expect(insert()).rejects.toMatchObject({ code: '23505' });
+    } finally {
+      await db.superuser.query("SET timezone = 'UTC'");
+    }
+  });
+});

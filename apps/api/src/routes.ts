@@ -10,6 +10,7 @@ import type { ApiDb } from './db.js';
 import { AppError } from './errors.js';
 import type { CsmsAdapter } from '@evstation/csms-adapter';
 import { setActorContext, setTenantContext } from './context.js';
+import { releaseStationLock, tryStationLock } from './station-lock.js';
 import { CsmsError } from '@evstation/csms-adapter';
 import type { Mailer } from './mailer.js';
 import { PaginationQuery, decodeCursor, page } from './pagination.js';
@@ -767,11 +768,12 @@ export const ROUTES: RouteDefinition[] = [
           });
         });
       } catch {
-        void reply.code(500);
+        void reply.code(503);
         return {
           error: {
-            code: 'STATION_STATE_FAILED',
-            message: 'station registration state could not be recorded',
+            code: 'REGISTRATION_STATE_RETRY',
+            message: 'registration succeeded but state could not be recorded; retry',
+            retryable: true,
           },
           station: { id: stationId, station_ref: body.station_ref, registration_status: 'pending' },
         };
@@ -932,9 +934,17 @@ export const ROUTES: RouteDefinition[] = [
         );
       }
       await client.query('COMMIT');
-      const lock = client;
+      const lock = await db.pool.connect();
       try {
-        await lock.query('SELECT pg_advisory_lock(hashtext($1))', [row.station_ref]);
+        if (!(await tryStationLock(lock, row.station_ref))) {
+          void reply.code(409);
+          return {
+            error: {
+              code: 'ROTATION_IN_PROGRESS',
+              message: 'credential rotation is already in progress',
+            },
+          };
+        }
         let credentials: string;
         try {
           credentials = await adapter.rotatePassword(row.station_ref);
@@ -992,9 +1002,7 @@ export const ROUTES: RouteDefinition[] = [
           credentials: { username: row.station_ref, password: credentials },
         };
       } finally {
-        await lock
-          .query('SELECT pg_advisory_unlock(hashtext($1))', [row.station_ref])
-          .catch(() => undefined);
+        await releaseStationLock(lock, row.station_ref);
       }
     },
   },
@@ -1026,6 +1034,14 @@ export const ROUTES: RouteDefinition[] = [
       );
       const row = station.rows[0];
       if (!row) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      const retryable =
+        row.registration_status === 'pending' ||
+        row.registration_status === 'registration_failed' ||
+        (row.registration_status === 'registered' &&
+          ['none', 'rotation_incomplete'].includes(row.credentials_state));
+      if (!retryable) {
+        throw new AppError(409, 'STATION_NOT_RETRYABLE', 'station is not in a retryable state');
+      }
       await client.query('COMMIT');
       try {
         const result = await adapter.registerStation({
