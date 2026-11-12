@@ -40,6 +40,8 @@ jobs:
           HASURA_LIVE_TEST=1 pnpm vitest run packages/csms-adapter/test/hasura-role.test.ts packages/csms-adapter/test/hasura-live.test.ts
       - name: Prepare Phase 1 database
         run: pnpm db:migrate && pnpm db:seed
+      - name: Phase 2b E2E (API registration + 8082 Basic auth + replay + cross-tenant)
+        run: pnpm test:e2e:phase2b
       - name: Install dashboard browser
         run: pnpm --filter @evstation/dashboard exec playwright install --with-deps chromium
       - name: Real Keycloak + API dashboard E2E
@@ -52,6 +54,7 @@ jobs:
           docker logs evstation-graphql-engine-1 > smoke-hasura.log 2>&1 || true
           pnpm health > smoke-health.txt || true
           docker logs evstation-keycloak-1 > smoke-keycloak.log 2>&1 || true
+          cat /tmp/evstation-phase2b-*.log > smoke-phase2b.log 2>/dev/null || true
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

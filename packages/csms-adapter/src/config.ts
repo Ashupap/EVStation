@@ -9,6 +9,9 @@ export interface CsmsAdapterConfig {
   readerClientSecret: string;
   tenantId: number;
   timeoutMs: number;
+  amqpUrl: string;
+  ingestQueue: string;
+  maxRetries: number;
 }
 
 function required(value: string | undefined, name: string): string {
@@ -47,5 +50,8 @@ export function loadCsmsAdapterConfig(
     readerClientSecret: required(env.CSMS_READER_CLIENT_SECRET, 'CSMS_READER_CLIENT_SECRET'),
     tenantId,
     timeoutMs: Number(env.CSMS_TIMEOUT_MS ?? '10000'),
+    amqpUrl: env.CSMS_AMQP_URL ?? 'amqp://guest:guest@localhost:5672',
+    ingestQueue: env.CSMS_INGEST_QUEUE ?? 'evstation.ingest',
+    maxRetries: Number(env.CSMS_INGEST_MAX_RETRIES ?? '5'),
   };
 }

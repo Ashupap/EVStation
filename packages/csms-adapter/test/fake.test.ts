@@ -21,13 +21,12 @@ describe('fake CSMS adapter', () => {
     ).rejects.toMatchObject({ code: 'CSMS_CONFLICT' });
   });
 
-  it('returns credentials for provision/rotate and stubs command/events', async () => {
+  it('returns credentials for provision/rotate and stubs commands/events', async () => {
     const adapter = createFakeCsmsAdapter();
     expect(await adapter.provisionPassword('x')).toMatch(/^fake-/u);
     expect(await adapter.rotatePassword('x')).toMatch(/^rotated-/u);
     await expect(adapter.sendCommand('x', 'reset', {})).rejects.toBeInstanceOf(CsmsError);
-    await expect(adapter.subscribeEvents(async () => {})).rejects.toMatchObject({
-      code: 'CSMS_NOT_IMPLEMENTED',
-    });
+    const subscription = await adapter.subscribeEvents(async () => undefined);
+    await expect(subscription.close()).resolves.toBeUndefined();
   });
 });

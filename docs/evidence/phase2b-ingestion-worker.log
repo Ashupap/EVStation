@@ -1,0 +1,6 @@
+
+> @evstation/worker@0.0.0 start /home/ubuntu/EVStation/apps/worker
+> tsx src/index.ts
+
+worker_started { queue: 'evstation.ingest', healthPort: 4100 }
+worker_jobs { expired: 0, offline: 0, stale: 0, idTags: 0, dropped: 0 }

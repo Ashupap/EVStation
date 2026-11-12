@@ -50,6 +50,7 @@ const capabilities: Capability[] = [
   'station.create',
   'station.update',
   'station.credentials.rotate',
+  'session.read',
 ];
 
 describe('permission matrix (one assertion per role per capability)', () => {
@@ -81,6 +82,7 @@ describe('permission matrix (one assertion per role per capability)', () => {
       'station.create',
       'station.update',
       'station.credentials.rotate',
+      'session.read',
     ]);
     for (const capability of capabilities) {
       expect(authorize(principal('tenant_admin'), TENANT, capability, { siteId: OTHER_SITE })).toBe(
@@ -98,6 +100,7 @@ describe('permission matrix (one assertion per role per capability)', () => {
       'invitation.accept',
       'station.read',
       'station.update',
+      'session.read',
     ]);
     for (const capability of capabilities) {
       expect(authorize(principal('site_manager'), TENANT, capability, { siteId: SITE })).toBe(
@@ -117,6 +120,7 @@ describe('permission matrix (one assertion per role per capability)', () => {
       'site.read',
       'invitation.accept',
       'station.read',
+      'session.read',
     ]);
     for (const capability of capabilities) {
       expect(authorize(principal('viewer'), TENANT, capability)).toBe(allowed.has(capability));

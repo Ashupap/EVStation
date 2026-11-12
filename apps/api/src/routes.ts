@@ -77,6 +77,10 @@ const InvitationCreate = z
   .strict();
 const InvitationAccept = z.object({ token: z.string().min(20).max(512) }).strict();
 const IdParams = z.object({ id: uuid }).strict();
+
+function maskIdTag(value: string | null): string | null {
+  return value ? `****${value.slice(-4)}` : null;
+}
 const InvitationParams = z.object({ tenantId: uuid, invitationId: uuid }).strict();
 const TenantParams = z.object({ tenantId: uuid }).strict();
 const StationCreate = z
@@ -103,6 +107,13 @@ const StationCreate = z
       .optional(),
   })
   .strict();
+const EventQuery = z
+  .object({ limit: z.coerce.number().int().min(1).max(1000).default(200) })
+  .strict();
+const SessionQuery = PaginationQuery.extend({
+  station_id: uuid.optional(),
+  status: z.enum(['starting', 'active', 'completed', 'failed']).optional(),
+}).strict();
 const StationUpdate = z
   .object({
     vendor: z.string().trim().max(200).nullable().optional(),
@@ -624,6 +635,92 @@ export const ROUTES: RouteDefinition[] = [
   },
   {
     method: 'GET',
+    url: '/sessions',
+    tenantSource: 'header',
+    capability: 'session.read',
+    schema: { tags: ['sessions'], querystring: SessionQuery },
+    async handler({ client, tenantId, request }) {
+      if (!tenantId) throw new AppError(400, 'TENANT_REQUIRED', 'X-Tenant-Id is required');
+      const query = SessionQuery.parse(request.query);
+      const after = query.cursor ? decodeCursor(query.cursor, 2) : undefined;
+      const values: unknown[] = [tenantId];
+      const filters = ['s.tenant_id = $1'];
+      if (query.station_id) {
+        values.push(query.station_id);
+        filters.push(`s.station_id = $${values.length}`);
+      }
+      if (query.status) {
+        values.push(query.status);
+        filters.push(`s.status = $${values.length}`);
+      }
+      if (after) {
+        values.push(after[0], after[1]);
+        filters.push(
+          `(s.started_at, s.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`,
+        );
+      }
+      values.push(query.limit + 1);
+      const { rows } = await client.query(
+        `SELECT s.id, s.tenant_id, s.site_id, s.station_id, s.connector_id,
+                s.csms_transaction_ref, s.id_tag, s.started_at, s.ended_at,
+                s.energy_wh, s.status, s.stop_reason, s.started_at_source,
+                s.ended_at_source, s.created_at, s.updated_at,
+                st.station_ref, c.connector_number
+         FROM app.sessions s
+         JOIN app.stations st ON st.id = s.station_id
+         JOIN app.connectors c ON c.id = s.connector_id
+         WHERE ${filters.join(' AND ')}
+         ORDER BY s.started_at DESC, s.id DESC LIMIT $${values.length}`,
+        values,
+      );
+      const masked = rows.map((row) => ({
+        ...row,
+        id_tag: maskIdTag((row as { id_tag: string | null }).id_tag),
+      }));
+      const pageResult = page(masked, query.limit, (row) => {
+        const startedAt = (row as { started_at: Date | string }).started_at;
+        return [
+          startedAt instanceof Date ? startedAt.toISOString() : String(startedAt),
+          String((row as { id: string }).id),
+        ];
+      });
+      return { sessions: pageResult.items, next_cursor: pageResult.nextCursor };
+    },
+  },
+  {
+    method: 'GET',
+    url: '/sessions/:id',
+    tenantSource: 'header',
+    capability: 'session.read',
+    schema: { tags: ['sessions'], params: IdParams },
+    isolation: { params: { id: '50000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      if (!tenantId) throw new AppError(400, 'TENANT_REQUIRED', 'X-Tenant-Id is required');
+      const params = IdParams.parse(request.params);
+      const session = await client.query(
+        `SELECT s.*, st.station_ref, c.connector_number
+         FROM app.sessions s
+         JOIN app.stations st ON st.id = s.station_id
+         JOIN app.connectors c ON c.id = s.connector_id
+         WHERE s.id = $1 AND s.tenant_id = $2`,
+        [params.id, tenantId],
+      );
+      const sessionRow = session.rows[0] as
+        (Record<string, unknown> & { id_tag?: string | null }) | undefined;
+      if (!sessionRow) throw new AppError(404, 'NOT_FOUND', 'session not found');
+      sessionRow.id_tag = maskIdTag(sessionRow.id_tag ?? null);
+      const meters = await client.query(
+        `SELECT id, csms_event_ref, csms_timestamp, charger_reported_at, energy_wh, power_w
+         FROM app.session_meter_values
+         WHERE session_id = $1 AND tenant_id = $2
+         ORDER BY csms_timestamp, id LIMIT 200`,
+        [params.id, tenantId],
+      );
+      return { session: sessionRow, meter_values: meters.rows };
+    },
+  },
+  {
+    method: 'GET',
     url: '/stations',
     tenantSource: 'header',
     capability: 'station.read',
@@ -636,7 +733,7 @@ export const ROUTES: RouteDefinition[] = [
         `SELECT s.id, s.tenant_id, s.site_id, s.station_ref, s.registration_status,
                 s.credentials_state, s.vendor, s.model, s.serial, s.firmware_version,
                 s.ocpp_version, s.created_at, s.updated_at,
-                r.connection_state, r.last_heartbeat_at, r.last_connected_at
+                r.connection_state, r.last_heartbeat_at, r.last_connected_at, r.last_seen_at
          FROM app.stations s
          LEFT JOIN app.station_runtime_state r ON r.station_id = s.id
          WHERE s.tenant_id = $1 ${after ? 'AND (s.station_ref, s.id) > ($2, $3)' : ''}
@@ -759,6 +856,23 @@ export const ROUTES: RouteDefinition[] = [
             stationId,
             result.csmsStationId,
           ]);
+          const connectors = body.connectors?.length ? body.connectors : [{ connector_number: 1 }];
+          for (const connector of connectors) {
+            await tx.query(
+              `INSERT INTO app.connectors
+                 (tenant_id, site_id, station_id, connector_number, type, max_power_w)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (station_id, connector_number) DO NOTHING`,
+              [
+                tenantId,
+                body.site_id,
+                stationId,
+                connector.connector_number,
+                connector.type ?? null,
+                connector.max_power_w ?? null,
+              ],
+            );
+          }
           await writeAudit(tx, principal, {
             tenantId,
             action: 'station.created',
@@ -834,7 +948,7 @@ export const ROUTES: RouteDefinition[] = [
     async handler({ client, tenantId, request }) {
       const params = IdParams.parse(request.params);
       const { rows } = await client.query(
-        `SELECT s.*, r.connection_state, r.last_heartbeat_at, r.last_connected_at
+        `SELECT s.*, r.connection_state, r.last_heartbeat_at, r.last_connected_at, r.last_seen_at
          FROM app.stations s LEFT JOIN app.station_runtime_state r ON r.station_id = s.id
          WHERE s.id = $1 AND s.tenant_id = $2`,
         [params.id, tenantId],
@@ -870,6 +984,60 @@ export const ROUTES: RouteDefinition[] = [
         requestId: request.id,
       });
       return rows[0];
+    },
+  },
+  {
+    method: 'GET',
+    url: '/stations/:id/status-events',
+    tenantSource: 'header',
+    capability: 'station.read',
+    schema: { tags: ['stations'], params: IdParams, querystring: EventQuery },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      const params = IdParams.parse(request.params);
+      const query = EventQuery.parse(request.query);
+      const station = await client.query(
+        'SELECT id FROM app.stations WHERE id = $1 AND tenant_id = $2',
+        [params.id, tenantId],
+      );
+      if (!station.rows[0]) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      const { rows } = await client.query(
+        `SELECT e.id, e.connector_id, c.connector_number, e.status, e.error_code,
+                e.csms_event_ref, e.csms_timestamp, e.charger_reported_at
+         FROM app.station_status_events e
+         LEFT JOIN app.connectors c ON c.id = e.connector_id
+         WHERE e.station_id = $1 AND e.tenant_id = $2
+         ORDER BY e.csms_timestamp DESC, e.id DESC LIMIT $3`,
+        [params.id, tenantId, query.limit],
+      );
+      return { status_events: rows };
+    },
+  },
+  {
+    method: 'GET',
+    url: '/stations/:id/ingestion-events',
+    tenantSource: 'header',
+    capability: 'station.read',
+    schema: { tags: ['stations'], params: IdParams, querystring: EventQuery },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      const params = IdParams.parse(request.params);
+      const query = EventQuery.parse(request.query);
+      const station = await client.query<{ station_ref: string }>(
+        'SELECT station_ref FROM app.stations WHERE id = $1 AND tenant_id = $2',
+        [params.id, tenantId],
+      );
+      const row = station.rows[0];
+      if (!row) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      const { rows } = await client.query(
+        `SELECT id, station_ref, kind, csms_event_ref, csms_timestamp, outcome,
+                reason_code, occurrence_count
+         FROM app.ingestion_events
+         WHERE station_ref = $1 AND tenant_id = $2
+         ORDER BY csms_timestamp DESC, id DESC LIMIT $3`,
+        [row.station_ref, tenantId, query.limit],
+      );
+      return { ingestion_events: rows };
     },
   },
   {

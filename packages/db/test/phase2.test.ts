@@ -355,9 +355,9 @@ describe('Phase 2 partition and dedup invariants', () => {
     await insert('2026-12-01T00:00:00Z', 'different-timestamp');
   });
 
-  test('ingestion/pending tables are not exposed to the app role', async () => {
+  test('ingestion ledger is parent-read-only for the app role; raw child/pending access is denied', async () => {
     await appTx(db, { actor: ADMIN_A, tenant: A }, async (client) => {
-      expect((await fail(client, 'SELECT * FROM app.ingestion_events')).code).toBe('42501');
+      expect((await client.query('SELECT * FROM app.ingestion_events')).rowCount).toBe(0);
       expect((await fail(client, 'SELECT * FROM app.pending_transaction_starts')).code).toBe(
         '42501',
       );

@@ -52,7 +52,7 @@ export class FakeCsmsAdapter implements CsmsAdapter {
   }
 
   async subscribeEvents(): Promise<{ close(): Promise<void> }> {
-    throw new CsmsError('event ingestion lands in Phase 2b', 'CSMS_NOT_IMPLEMENTED');
+    return { close: async () => undefined };
   }
 
   async health(): Promise<CsmsHealth> {

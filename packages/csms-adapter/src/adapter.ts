@@ -5,9 +5,11 @@ import type {
   StationRegistrationInput,
   StationRegistrationResult,
   StationStatus,
+  CsmsEvent,
 } from './types.js';
 import { CsmsError } from './types.js';
 import type { CsmsAdapterConfig } from './config.js';
+import { subscribeAmqpEvents } from './events.js';
 import { HasuraClient } from './hasura.js';
 import { CitrineRestClient } from './rest.js';
 import { TokenProvider } from './token.js';
@@ -240,8 +242,13 @@ export class CitrineOsAdapter implements CsmsAdapter {
     throw new CsmsError('remote commands are Phase 4', 'CSMS_NOT_IMPLEMENTED');
   }
 
-  async subscribeEvents(): Promise<{ close(): Promise<void> }> {
-    throw new CsmsError('event ingestion lands in Phase 2b', 'CSMS_NOT_IMPLEMENTED');
+  async subscribeEvents(
+    handler: (event: CsmsEvent) => Promise<'ack' | 'retry' | void> | 'ack' | 'retry' | void,
+  ): Promise<{ close(): Promise<void> }> {
+    return subscribeAmqpEvents(
+      { amqpUrl: this.config.amqpUrl, queue: this.config.ingestQueue },
+      handler,
+    );
   }
 
   async health(): Promise<CsmsHealth> {

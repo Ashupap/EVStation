@@ -27,7 +27,10 @@
     "db:migrate": "node packages/db/scripts/migrate.mjs",
     "db:seed": "node packages/db/scripts/seed.mjs",
     "test:db": "vitest run packages/db/test",
-    "test:ocpp:production-like": "node scripts/ocpp-production-like-test.mjs"
+    "test:ocpp:production-like": "node scripts/ocpp-production-like-test.mjs",
+    "worker": "pnpm --filter @evstation/worker start",
+    "worker:dev": "pnpm --filter @evstation/worker dev",
+    "test:e2e:phase2b": "node tools/phase2b-e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
@@ -38,7 +41,8 @@
     "prettier": "3.9.10",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.1",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "pg": "8.23.1"
   },
   "description": "EV charging Central Management System (CMS) for India, built on CitrineOS.",
   "repository": {

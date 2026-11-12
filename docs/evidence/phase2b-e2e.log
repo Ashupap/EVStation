@@ -1,0 +1,54 @@
+
+> evstation@ test:e2e:phase2b /home/ubuntu/EVStation
+> node tools/phase2b-e2e.mjs
+
+ok   keycloak — admin tokens issued for tenants A and B
+ok   api-ready — http://127.0.0.1:4000/health/ready
+ok   worker-ready — healthz 200
+ok   api-register — ACME-BLR-749 station#bd9a37a2-30a9-4474-ab8f-e72c826ed886 (credentials returned)
+ok   api-register — BETA-BOM-749 station#dee64daf-3d1d-4382-a32a-ed7dcdcddb72 (credentials returned)
+Connecting to ws://localhost:8082/ACME-BLR-749 ...
+WebSocket connected (id=ACME-BLR-749, id_tag=DEADBEEF).
+
+--> [2, "1def293d-a353-40f2-bf7a-968b03c3773c", "BootNotification", {"chargePointVendor": "DemoVendor", "chargePointModel": "SIM-60", "chargePointSerialNumber": "ACME-BLR-749", "firmwareVersion": "1.0.0"}]
+<-- [3,"1def293d-a353-40f2-bf7a-968b03c3773c",{"currentTime":"2026-11-12T17:44:27.860Z","status":"Accepted","interval":60}]
+    assert OK  BootNotification.status == 'Accepted'
+--> [2, "b10ec8d5-9582-4503-bbd9-2b5212a75e0f", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Available", "timestamp": "2026-11-12T17:44:27.000Z"}]
+<-- [3,"b10ec8d5-9582-4503-bbd9-2b5212a75e0f",{}]
+--> [2, "2cde0f4a-05c5-4155-b3e6-946c74705e3a", "Authorize", {"idTag": "DEADBEEF"}]
+<-- [3,"2cde0f4a-05c5-4155-b3e6-946c74705e3a",{"idTagInfo":{"status":"Accepted"}}]
+    assert OK  Authorize.idTagInfo.status == 'Accepted'
+--> [2, "9167bf7a-3b50-491b-9bd3-e706ea6ccc15", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Preparing", "timestamp": "2026-11-12T17:44:28.000Z"}]
+<-- [3,"9167bf7a-3b50-491b-9bd3-e706ea6ccc15",{}]
+--> [2, "6e064556-1e56-4808-9db8-e64ac8e6ca83", "StartTransaction", {"connectorId": 1, "idTag": "DEADBEEF", "meterStart": 0, "timestamp": "2026-11-12T17:44:28.000Z"}]
+<-- [3,"6e064556-1e56-4808-9db8-e64ac8e6ca83",{"idTagInfo":{"status":"Accepted"},"transactionId":1}]
+--> [2, "049d964c-9921-4a19-b8a1-549113cbd57a", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Charging", "timestamp": "2026-11-12T17:44:28.000Z"}]
+<-- [3,"049d964c-9921-4a19-b8a1-549113cbd57a",{}]
+--> [2, "8bcbf8a0-308a-4835-8d03-c33b9ee0fcee", "MeterValues", {"connectorId": 1, "transactionId": 1, "meterValue": [{"timestamp": "2026-11-12T17:44:33.000Z", "sampledValue": [{"value": "250", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"8bcbf8a0-308a-4835-8d03-c33b9ee0fcee",{}]
+--> [2, "bc51637c-ed85-4a9d-a0b5-b37e8e8d4912", "MeterValues", {"connectorId": 1, "transactionId": 1, "meterValue": [{"timestamp": "2026-11-12T17:44:38.000Z", "sampledValue": [{"value": "500", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"bc51637c-ed85-4a9d-a0b5-b37e8e8d4912",{}]
+--> [2, "08510c54-a65f-457a-8e0f-1ee25e23a16e", "MeterValues", {"connectorId": 1, "transactionId": 1, "meterValue": [{"timestamp": "2026-11-12T17:44:43.000Z", "sampledValue": [{"value": "750", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"08510c54-a65f-457a-8e0f-1ee25e23a16e",{}]
+--> [2, "12068f50-e3e8-4b1f-b36b-96c595d91b65", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Finishing", "timestamp": "2026-11-12T17:44:43.000Z"}]
+<-- [3,"12068f50-e3e8-4b1f-b36b-96c595d91b65",{}]
+--> [2, "1428cf74-537f-4111-9af9-3460b8bd0352", "StopTransaction", {"transactionId": 1, "idTag": "DEADBEEF", "meterStop": 750, "timestamp": "2026-11-12T17:44:43.000Z", "reason": "Local"}]
+<-- [3,"1428cf74-537f-4111-9af9-3460b8bd0352",{"idTagInfo":{"status":"Accepted"}}]
+--> [2, "e287a189-24d3-41f3-a1e2-fff1d353ecbd", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Available", "timestamp": "2026-11-12T17:44:43.000Z"}]
+<-- [3,"e287a189-24d3-41f3-a1e2-fff1d353ecbd",{}]
+
+Session complete; exiting cleanly (--exit-after-session).
+ok   simulator — 8082 Basic auth session bd9a37a2-30a9-4474-ab8f-e72c826ed886
+ok   capture — 14 AMQP messages captured
+ok   A-meter — 3 samples
+ok   A-status — 5 StatusNotifications
+ok   A-connector — available
+ok   A-runtime — disconnected with last_seen_at
+ok   A-ledger — no heartbeat/status/meter rows; kinds={"connection":2,"stop":1,"start_response":1,"start":1,"boot":1}
+ok   replay-idempotent — sessions/meters/status/ledger unchanged
+ok   out-of-order — stale connected did not override closed
+ok   B-session — completed
+ok   B-status — 5 StatusNotifications
+ok   B-ledger — no heartbeat/status/meter rows; kinds={"connection":2,"stop":1,"start_response":1,"start":1,"boot":1}
+ok   cross-tenant — tenant-B events did not touch tenant-A rows
+phase2b-e2e: PASS

@@ -187,6 +187,7 @@ describe('role attributes and object ownership', () => {
       'connectors',
       'email_outbox',
       'ingestion_events',
+      'ingestion_rejections',
       'invitations',
       'membership_sites',
       'memberships',
@@ -1303,8 +1304,8 @@ describe('database catalog invariants', () => {
   test('app table privileges are the least-privilege matrix; PUBLIC has none', async () => {
     const expected: Record<string, string[]> = {
       audit_log: ['SELECT', 'INSERT'],
-      connectors: ['SELECT'],
-      ingestion_events: [],
+      connectors: ['SELECT', 'INSERT'],
+      ingestion_events: ['SELECT'],
       invitations: ['SELECT'],
       membership_sites: ['SELECT', 'INSERT', 'DELETE'],
       memberships: ['SELECT', 'INSERT', 'DELETE'],

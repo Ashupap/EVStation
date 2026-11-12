@@ -771,8 +771,9 @@ email)` owned by `evstation_definer` (atomic: membership insert +
   migration/superuser-invoked helper: it detaches the default partition, creates
   the monthly partition, moves matching default rows with
   `OVERRIDING SYSTEM VALUE`, reattaches the default, and applies
-  `ENABLE/FORCE RLS` plus `REVOKE` to the new child. It is not granted to the
-  app/worker roles.
+  `ENABLE/FORCE RLS` plus `REVOKE` to the new child. As of 2b it is
+  SECURITY DEFINER owned by `evstation_event_owner` and granted only to
+  `evstation_jobs`; the app and ingest login roles cannot run it.
 - **Consequences.** Dropping old data is a partition operation, not row-by-row
   DELETE. Direct child access is denied; queries go through the parent RLS
   policies. A replay with the same event ref but a different envelope timestamp
@@ -794,5 +795,42 @@ email)` owned by `evstation_definer` (atomic: membership insert +
    station without the marker.
 3. Live Hasura permissions and Keycloak service-account tests run in the smoke
    workflow, not in the required PR CI (they need the live stack).
-4. Ingest roles, AMQP consumer, SSE and session/meter ingestion are PR 2b/2c
-   scope; no ingest credentials are granted to the API or browser in 2a.
+4. Session/meter ingestion and the AMQP worker land in 2b. Live session
+   streaming (SSE) remains PR 2c scope; no ingest credential is granted to the
+   browser or API runtime.
+
+### ADR-0026: Phase 2b ingestion uses a dedicated AMQP worker and SECURITY DEFINER functions
+
+- **Context.** CitrineOS publishes every OCPP frame and connection transition
+  on its `messages` topic exchange. The app role must never receive broad
+  `frame.#` access, and the worker must not be able to publish or mutate
+  arbitrary tenant rows.
+- **Decision.** `evstation_ingest` is a LOGIN/NOBYPASSRLS role with EXECUTE
+  only on narrowly named ingestion functions. A NOLOGIN/BYPASSRLS
+  `evstation_ingest_definer` owns those functions and derives tenant/site from
+  `station_ref`; callers cannot pass tenant/site. Event tables are owned by
+  `evstation_event_owner` (also BYPASSRLS) so partition maintenance can run
+  without broad table grants. `evstation_jobs` is a LOGIN/NOBYPASSRLS
+  execute-only role for sweeper/retention functions. The worker consumes only
+  `frame.inbound.{BootNotification,StatusNotification,Heartbeat,StartTransaction,MeterValues,StopTransaction}`,
+  `frame.outbound.StartTransaction`, `connection.connected` and
+  `connection.closed` from `evstation.ingest`.
+- **Retry.** The main queue dead-letters to `evstation.ingest.dlx`, which routes
+  to `evstation.ingest.retry` with a fixed 30 s TTL and back to `messages`.
+  The worker nacks with `requeue=false`; it never publishes. After five
+  retries (`x-death` count) it writes a `parked` ledger row and acks. Malformed
+  frames are recorded as collapsed rejections and acked immediately.
+- **Idempotency.** `csms_event_ref` is
+  `frame:<direction>:<action>:<correlationId>:<sampleIndex>` and connection refs
+  include station/state/envelope timestamp. Unique keys include the envelope
+  timestamp. Meter rows additionally dedupe by `(session_id,
+charger_reported_at)` because sample replay can arrive with a new envelope.
+  A new accepted start response supersedes an existing live session on that
+  connector (`stop_reason='superseded'`); stop is idempotent per transaction.
+- **Ledger/volume.** Accepted heartbeats, status events and meter samples are
+  not ledgered. The ledger contains rejected/parked events plus low-volume
+  boot/connection/start/stop lifecycle. Unknown-station floods collapse by
+  `(station_ref, reason_code, day)` with `occurrence_count`.
+- **Known limitation.** The same event ref with a different envelope timestamp
+  is not deduplicated. This is intentional for the first ingestion slice;
+  a body-hash fallback would require a separately indexed dedup store.

@@ -5,6 +5,8 @@ import { seedDev, SEED_IDS } from '../scripts/seed.mjs';
 
 export const OWNER_PASSWORD = 'owner-test-password';
 export const APP_PASSWORD = 'app-test-password';
+export const INGEST_PASSWORD = 'ingest-test-password';
+export const JOBS_PASSWORD = 'jobs-test-password';
 const SUPERUSER_PASSWORD = 'superuser-test-password';
 
 export const OUTSIDER_ID = '00000000-0000-4000-8000-000000000099';
@@ -37,6 +39,8 @@ export async function startDb({ untilFile }: { untilFile?: string } = {}): Promi
     migratorUrl,
     ownerPassword: OWNER_PASSWORD,
     appPassword: APP_PASSWORD,
+    ingestPassword: INGEST_PASSWORD,
+    jobsPassword: JOBS_PASSWORD,
     ...(untilFile ? { untilFile } : {}),
   });
   const appUrl = urlFor(migratorUrl, 'evstation_app', APP_PASSWORD);
@@ -55,7 +59,7 @@ export async function stopDb(db: TestDb) {
 
 export async function resetDb(db: TestDb) {
   await db.superuser.query(
-    `TRUNCATE app.ingestion_events, app.pending_transaction_starts,
+    `TRUNCATE app.ingestion_events, app.ingestion_rejections, app.pending_transaction_starts,
        app.station_status_events, app.session_meter_values, app.sessions,
        app.connectors, app.station_runtime_state, app.stations,
        app.email_outbox, app.audit_log, app.invitations,

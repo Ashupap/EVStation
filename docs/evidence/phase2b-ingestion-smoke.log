@@ -1,0 +1,53 @@
+
+> evstation@ smoke /home/ubuntu/EVStation
+> node tools/smoke.mjs
+
+ok   hasura — healthz 200
+ok   fixtures — upserted: location#1 station#20 evse#5 connector#3 authorization#1
+ok   app-fixture — station ACME-BLR-001 ready
+ok   pre-run — Transactions count = 10
+Connecting to ws://localhost:8081/ACME-BLR-001 ...
+WebSocket connected (id=ACME-BLR-001, id_tag=DEADBEEF).
+
+--> [2, "4f0c1a09-888c-47de-8cb0-5478435cdf2d", "BootNotification", {"chargePointVendor": "DemoVendor", "chargePointModel": "SIM-60", "chargePointSerialNumber": "ACME-BLR-001", "firmwareVersion": "1.0.0"}]
+<-- [3,"4f0c1a09-888c-47de-8cb0-5478435cdf2d",{"currentTime":"2026-11-12T15:46:01.539Z","status":"Accepted","interval":60}]
+    assert OK  BootNotification.status == 'Accepted'
+--> [2, "6d07df2e-8c92-4ee4-97bd-8eea21de0a01", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Available", "timestamp": "2026-11-12T15:46:01.000Z"}]
+<-- [3,"6d07df2e-8c92-4ee4-97bd-8eea21de0a01",{}]
+--> [2, "83d76486-014b-4144-baa2-66f621bff791", "Authorize", {"idTag": "DEADBEEF"}]
+<-- [3,"83d76486-014b-4144-baa2-66f621bff791",{"idTagInfo":{"status":"Accepted"}}]
+    assert OK  Authorize.idTagInfo.status == 'Accepted'
+--> [2, "a6c9ce68-3fd7-4252-a64c-1cd0e218ac33", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Preparing", "timestamp": "2026-11-12T15:46:01.000Z"}]
+<-- [3,"a6c9ce68-3fd7-4252-a64c-1cd0e218ac33",{}]
+--> [2, "02680d02-9979-446e-881a-56e99d506031", "StartTransaction", {"connectorId": 1, "idTag": "DEADBEEF", "meterStart": 0, "timestamp": "2026-11-12T15:46:01.000Z"}]
+<-- [3,"02680d02-9979-446e-881a-56e99d506031",{"idTagInfo":{"status":"Accepted"},"transactionId":5}]
+--> [2, "c5d38e88-363e-4bfe-b83c-96cb88a2dbae", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Charging", "timestamp": "2026-11-12T15:46:02.000Z"}]
+<-- [3,"c5d38e88-363e-4bfe-b83c-96cb88a2dbae",{}]
+--> [2, "6fb99f81-5d8b-491e-aa15-987552b23e02", "MeterValues", {"connectorId": 1, "transactionId": 5, "meterValue": [{"timestamp": "2026-11-12T15:46:07.000Z", "sampledValue": [{"value": "250", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"6fb99f81-5d8b-491e-aa15-987552b23e02",{}]
+--> [2, "c459df98-3db5-40f8-91c1-670025e7bbdf", "MeterValues", {"connectorId": 1, "transactionId": 5, "meterValue": [{"timestamp": "2026-11-12T15:46:12.000Z", "sampledValue": [{"value": "500", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"c459df98-3db5-40f8-91c1-670025e7bbdf",{}]
+--> [2, "c8f2b4d6-ea34-48ab-a4d9-06ab619d50e6", "MeterValues", {"connectorId": 1, "transactionId": 5, "meterValue": [{"timestamp": "2026-11-12T15:46:17.000Z", "sampledValue": [{"value": "750", "measurand": "Energy.Active.Import.Register", "unit": "Wh"}, {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"}]}]}]
+<-- [3,"c8f2b4d6-ea34-48ab-a4d9-06ab619d50e6",{}]
+--> [2, "33b899bd-64c6-4ca4-a682-45c9ad91d0e2", "StopTransaction", {"transactionId": 5, "idTag": "DEADBEEF", "meterStop": 750, "timestamp": "2026-11-12T15:46:17.000Z", "reason": "Local"}]
+<-- [3,"33b899bd-64c6-4ca4-a682-45c9ad91d0e2",{"idTagInfo":{"status":"Accepted"}}]
+--> [2, "ab550e2f-5d6b-4ade-9898-981d48929f12", "StatusNotification", {"connectorId": 1, "errorCode": "NoError", "status": "Available", "timestamp": "2026-11-12T15:46:17.000Z"}]
+<-- [3,"ab550e2f-5d6b-4ade-9898-981d48929f12",{}]
+
+Session complete; exiting cleanly (--exit-after-session).
+ok   simulator — exit 0 (/home/ubuntu/EVStation/.venv/bin/python)
+ok   this-run — simulator session used transactionId=5
+ok   transactions — exactly 1 new row (10 -> 11)
+ok   transactionId — this run's id (5)
+ok   stationId — == created station pk 20
+ok   connectorId — == 3
+ok   authorizationId — == upserted authorization pk 1
+ok   totalKwh — energy recorded (0.75 kWh)
+ok   endTime — closed (2026-11-12T15:46:17+00:00)
+ok   app-session — completed, stop_reason=Local
+ok   app-energy — 750 Wh
+ok   app-meter — 3 samples
+ok   app-boot — reported DemoVendor/SIM-60
+ok   boots — exactly 1 row, status Accepted
+ok   no-duplicates — fixtures by natural key after the run: locations=1 stations=1 evses=1 connectors=1 authorizations=1
+smoke: PASS (exit 0)

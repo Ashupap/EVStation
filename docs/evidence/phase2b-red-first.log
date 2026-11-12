@@ -1,0 +1,226 @@
+
+ RUN  v5.0.5 /home/ubuntu/EVStation
+
+ ❯ apps/worker/test/meter.test.ts (0 test)
+ ❯ apps/worker/test/ingest.test.ts (0 test)
+stdout | packages/db/test/phase2b.test.ts > Phase 2b roles and ownership > ingest and jobs are execute-only; event trees are owned by event owner
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > boot records reported fields, while heartbeat/status stay out of the ledger
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > out-of-order connection events do not override a newer closed state
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > start response supersedes the previous live session; meter redelivery and stop are idempotent
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > unknown-station rejection is collapsed per station/reason/day
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > replay of the same captured events is idempotent and does not inflate rows
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > cross-tenant events resolve tenant from station_ref and cannot touch tenant A
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > jobs expire pending starts, close stale sessions, and validate partition parents
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ❯ packages/db/test/phase2b.test.ts (8 tests | 8 failed) 14927ms
+   ❯ Phase 2b roles and ownership (1)
+     × ingest and jobs are execute-only; event trees are owned by event owner 372ms
+   ❯ Phase 2b ingestion behavior (7)
+     × boot records reported fields, while heartbeat/status stay out of the ledger 301ms
+     × out-of-order connection events do not override a newer closed state 289ms
+     × start response supersedes the previous live session; meter redelivery and stop are idempotent 309ms
+     × unknown-station rejection is collapsed per station/reason/day 300ms
+     × replay of the same captured events is idempotent and does not inflate rows 342ms
+     × cross-tenant events resolve tenant from station_ref and cannot touch tenant A 317ms
+     × jobs expire pending starts, close stale sessions, and validate partition parents 296ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/worker/test/ingest.test.ts [ apps/worker/test/ingest.test.ts ]
+Error: Cannot find module '../src/ingest.js' imported from /home/ubuntu/EVStation/apps/worker/test/ingest.test.ts
+ ❯ apps/worker/test/ingest.test.ts:4:1
+      2| import { describe, expect, it, vi } from 'vitest';
+      3| import type { CsmsEvent } from '@evstation/csms-adapter';
+      4| import { handleEvent } from '../src/ingest.js';
+       | ^
+      5|
+      6| const HASH_EVENT: CsmsEvent = {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/10]⎯
+
+ FAIL  apps/worker/test/meter.test.ts [ apps/worker/test/meter.test.ts ]
+Error: Cannot find module '../src/meter.js' imported from /home/ubuntu/EVStation/apps/worker/test/meter.test.ts
+ ❯ apps/worker/test/meter.test.ts:2:1
+      1| import { describe, expect, it } from 'vitest';
+      2| import { normalizeMeterValues } from '../src/meter.js';
+       | ^
+      3|
+      4| describe('meter normalization', () => {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/10]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b roles and ownership > ingest and jobs are execute-only; event trees are owned by event owner
+AssertionError: evstation_ingest ingest_boot: expected undefined to be true // Object.is equality
+
+- Expected:
+true
+
++ Received:
+undefined
+
+ ❯ packages/db/test/phase2b.test.ts:81:44
+     79|         [role, fn],
+     80|       );
+     81|       expect(rows[0]?.ok, `${role} ${fn}`).toBe(expected);
+       |                                            ^
+     82|     }
+     83|     const table = await db.superuser.query<{ ok: boolean }>(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/10]⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > boot records reported fields, while heartbeat/status stay out of the ledger
+error: function app.ingest_boot(unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown) does not exist
+ ❯ node_modules/.pnpm/pg@8.23.1/node_modules/pg/lib/client.js:694:17
+ ❯ call packages/db/test/phase2b.test.ts:58:20
+     56| async function call(client: Client, fn: string, args: unknown[]): Prom…
+     57|   const placeholders = args.map((_, index) => `$${index + 1}`).join(',…
+     58|   const { rows } = await client.query<{ result: string }>(
+       |                    ^
+     59|     `SELECT app.${fn}(${placeholders}) AS result`,
+     60|     args,
+ ❯ packages/db/test/phase2b.test.ts:104:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/10]⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > out-of-order connection events do not override a newer closed state
+error: function app.ingest_connection(unknown, unknown, unknown, unknown, unknown) does not exist
+ ❯ node_modules/.pnpm/pg@8.23.1/node_modules/pg/lib/client.js:694:17
+ ❯ call packages/db/test/phase2b.test.ts:58:20
+     56| async function call(client: Client, fn: string, args: unknown[]): Prom…
+     57|   const placeholders = args.map((_, index) => `$${index + 1}`).join(',…
+     58|   const { rows } = await client.query<{ result: string }>(
+       |                    ^
+     59|     `SELECT app.${fn}(${placeholders}) AS result`,
+     60|     args,
+ ❯ packages/db/test/phase2b.test.ts:158:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/10]⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > start response supersedes the previous live session; meter redelivery and stop are idempotent
+error: function app.ingest_transaction_start(unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown) does not exist
+ ❯ node_modules/.pnpm/pg@8.23.1/node_modules/pg/lib/client.js:694:17
+ ❯ call packages/db/test/phase2b.test.ts:58:20
+     56| async function call(client: Client, fn: string, args: unknown[]): Prom…
+     57|   const placeholders = args.map((_, index) => `$${index + 1}`).join(',…
+     58|   const { rows } = await client.query<{ result: string }>(
+       |                    ^
+     59|     `SELECT app.${fn}(${placeholders}) AS result`,
+     60|     args,
+ ❯ packages/db/test/phase2b.test.ts:187:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/10]⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > unknown-station rejection is collapsed per station/reason/day
+error: function app.ingest_heartbeat(unknown, unknown, unknown, unknown) does not exist
+ ❯ node_modules/.pnpm/pg@8.23.1/node_modules/pg/lib/client.js:694:17
+ ❯ call packages/db/test/phase2b.test.ts:58:20
+     56| async function call(client: Client, fn: string, args: unknown[]): Prom…
+     57|   const placeholders = args.map((_, index) => `$${index + 1}`).join(',…
+     58|   const { rows } = await client.query<{ result: string }>(
+       |                    ^
+     59|     `SELECT app.${fn}(${placeholders}) AS result`,
+     60|     args,
+ ❯ packages/db/test/phase2b.test.ts:321:9
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/10]⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > replay of the same captured events is idempotent and does not inflate rows
+error: function app.ingest_boot(unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown) does not exist
+ ❯ node_modules/.pnpm/pg@8.23.1/node_modules/pg/lib/client.js:694:17
+ ❯ call packages/db/test/phase2b.test.ts:58:20
+     56| async function call(client: Client, fn: string, args: unknown[]): Prom…
+     57|   const placeholders = args.map((_, index) => `$${index + 1}`).join(',…
+     58|   const { rows } = await client.query<{ result: string }>(
+       |                    ^
+     59|     `SELECT app.${fn}(${placeholders}) AS result`,
+     60|     args,
+ ❯ packages/db/test/phase2b.test.ts:352:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/10]⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > cross-tenant events resolve tenant from station_ref and cannot touch tenant A
+error: function app.ingest_transaction_start(unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown) does not exist
+ ❯ node_modules/.pnpm/pg@8.23.1/node_modules/pg/lib/client.js:694:17
+ ❯ call packages/db/test/phase2b.test.ts:58:20
+     56| async function call(client: Client, fn: string, args: unknown[]): Prom…
+     57|   const placeholders = args.map((_, index) => `$${index + 1}`).join(',…
+     58|   const { rows } = await client.query<{ result: string }>(
+       |                    ^
+     59|     `SELECT app.${fn}(${placeholders}) AS result`,
+     60|     args,
+ ❯ packages/db/test/phase2b.test.ts:478:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/10]⎯
+
+ FAIL  packages/db/test/phase2b.test.ts > Phase 2b ingestion behavior > jobs expire pending starts, close stale sessions, and validate partition parents
+error: function app.ingest_transaction_start(unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown, unknown) does not exist
+ ❯ node_modules/.pnpm/pg@8.23.1/node_modules/pg/lib/client.js:694:17
+ ❯ call packages/db/test/phase2b.test.ts:58:20
+     56| async function call(client: Client, fn: string, args: unknown[]): Prom…
+     57|   const placeholders = args.map((_, index) => `$${index + 1}`).join(',…
+     58|   const { rows } = await client.query<{ result: string }>(
+       |                    ^
+     59|     `SELECT app.${fn}(${placeholders}) AS result`,
+     60|     args,
+ ❯ packages/db/test/phase2b.test.ts:522:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/10]⎯
+
+
+ Test Files  3 failed (3)
+      Tests  8 failed (8)
+   Start at  22:56:16
+   Duration  16.13s (tests 95%, import 5%)
+
+
+
+# Red-first retry evidence (worker retry branch intentionally disabled)
+
+ RUN  v5.0.5 /home/ubuntu/EVStation
+
+ ❯ apps/worker/test/ingest.test.ts (2 tests | 1 failed) 26ms
+   ❯ worker event dispositions (2)
+     × retries a missing session until the broker death count reaches the limit 21ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/worker/test/ingest.test.ts > worker event dispositions > retries a missing session until the broker death count reaches the limit
+AssertionError: expected 'ack' to be 'retry' // Object.is equality
+
+Expected: "retry"
+Received: "ack"
+
+ ❯ apps/worker/test/ingest.test.ts:35:53
+     33|   it('retries a missing session until the broker death count reaches t…
+     34|     const first = pool('retry');
+     35|     expect(await handleEvent(HASH_EVENT, first, 5)).toBe('retry');
+       |                                                     ^
+     36|
+     37|     const parked = pool('retry');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+   Start at  22:56:47
+   Duration  469ms (transform 56%, import 23%, tests 15%, worker 6%)
+
