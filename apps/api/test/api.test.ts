@@ -2,6 +2,7 @@ import { Writable } from 'node:stream';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resetDb, startDb, stopDb, type TestDb } from '../../../packages/db/test/helpers.js';
 import { ROUTES } from '../src/routes.js';
+import { createFakeCsmsAdapter, CsmsError, type CsmsAdapter } from '@evstation/csms-adapter';
 import { BODY_LIMIT_BYTES, buildApp } from '../src/app.js';
 import type { TokenClaims, TokenVerifier } from '../src/auth.js';
 import type { ApiConfig } from '../src/config.js';
@@ -1607,6 +1608,97 @@ describe('station registration and credential rotation', () => {
     const [a, b] = await Promise.all([rotate(), rotate()]);
     expect(a.statusCode).toBe(200);
     expect(b.statusCode).toBe(200);
+  });
+
+  it('keeps a registered station registered when only password provisioning fails', async () => {
+    const adapter = createFakeCsmsAdapter();
+    const failing = adapter as CsmsAdapter & {
+      provisionPassword: () => Promise<string>;
+    };
+    failing.provisionPassword = async () => {
+      throw new CsmsError('credential failure', 'CSMS_UNAVAILABLE');
+    };
+    const failingApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: failing,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const response = await failingApp.inject({
+        method: 'POST',
+        url: '/stations',
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        payload: {
+          site_id: IDS.siteA1,
+          station_ref: 'ACME-BLR-804',
+          latitude: 12.97,
+          longitude: 77.59,
+        },
+      });
+      expect(response.statusCode).toBe(502);
+      const { rows } = await db.superuser.query<{
+        registration_status: string;
+        credentials_state: string;
+      }>('SELECT registration_status, credentials_state FROM app.stations WHERE station_ref = $1', [
+        'ACME-BLR-804',
+      ]);
+      expect(rows[0]).toEqual({
+        registration_status: 'registered',
+        credentials_state: 'rotation_incomplete',
+      });
+    } finally {
+      await failingApp.close();
+    }
+  });
+
+  it('marks registration_failed when the CSMS registration step fails', async () => {
+    const adapter = createFakeCsmsAdapter();
+    const failing = adapter as CsmsAdapter & {
+      registerStation: CsmsAdapter['registerStation'];
+    };
+    failing.registerStation = async () => {
+      throw new CsmsError('registration conflict', 'CSMS_CONFLICT');
+    };
+    const failingApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: failing,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const response = await failingApp.inject({
+        method: 'POST',
+        url: '/stations',
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        payload: {
+          site_id: IDS.siteA1,
+          station_ref: 'ACME-BLR-805',
+          latitude: 12.97,
+          longitude: 77.59,
+        },
+      });
+      expect(response.statusCode).toBe(409);
+      const { rows } = await db.superuser.query<{
+        registration_status: string;
+        registration_error: string;
+      }>(
+        'SELECT registration_status, registration_error FROM app.stations WHERE station_ref = $1',
+        ['ACME-BLR-805'],
+      );
+      expect(rows[0]).toEqual({
+        registration_status: 'registration_failed',
+        registration_error: 'CSMS_CONFLICT',
+      });
+    } finally {
+      await failingApp.close();
+    }
   });
 
   it('denies site managers station creation before any CitrineOS call', async () => {
