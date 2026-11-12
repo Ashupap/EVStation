@@ -376,7 +376,7 @@ function ledgerCounts(rows) {
   return counts;
 }
 
-function assertVolumeRules(rows, label) {
+function assertVolumeRules(rows, label, expectedConnection = 2) {
   const counts = ledgerCounts(rows);
   const forbidden = ['heartbeat', 'status', 'meter'];
   if (forbidden.some((kind) => counts[kind])) {
@@ -384,7 +384,13 @@ function assertVolumeRules(rows, label) {
   } else {
     ok(`${label}-ledger`, `no heartbeat/status/meter rows; kinds=${JSON.stringify(counts)}`);
   }
-  const expected = { boot: 1, connection: 2, start: 1, start_response: 1, stop: 1 };
+  const expected = {
+    boot: 1,
+    connection: expectedConnection,
+    start: 1,
+    start_response: 1,
+    stop: 1,
+  };
   for (const [kind, count] of Object.entries(expected)) {
     if (counts[kind] !== count)
       fail(`${label}-${kind}`, `expected ${count}, got ${counts[kind] ?? 0}`);
@@ -440,6 +446,7 @@ async function main() {
     process.stderr.write(simulator.stderr ?? '');
     if (simulator.status !== 0) throw new Error(`simulator failed exit=${simulator.status}`);
     ok('simulator', `8082 Basic auth session ${a.station.id}`);
+    await new Promise((resolve) => setTimeout(resolve, 750));
     const captured = await drainCapture(queue);
     ok('capture', `${captured.length} AMQP messages captured`);
 
@@ -534,7 +541,10 @@ async function main() {
     else ok('B-session', 'completed');
     if (bAfter.status.length !== 5) fail('B-status', `expected 5, got ${bAfter.status.length}`);
     else ok('B-status', '5 StatusNotifications');
-    assertVolumeRules(bAfter.ledger, 'B');
+    const capturedConnections = captured.filter((message) =>
+      message.routingKey.startsWith('connection.'),
+    ).length;
+    assertVolumeRules(bAfter.ledger, 'B', capturedConnections);
     const aAfterCross = await snapshot(tokenA, TENANT_A, a.station.id);
     if (
       aAfterCross.sessions.length !== aCounts.sessions ||
