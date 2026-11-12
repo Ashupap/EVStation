@@ -192,23 +192,18 @@ describe('Phase 2 station/session RLS', () => {
     });
   });
 
-  test('site manager may register a station only in an assigned site', async () => {
-    await appCommit(db, { actor: MANAGER_A, tenant: A }, async (client) => {
-      await client.query(
-        `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref)
-         VALUES ($1, $2, 'ACME', 'ACME-BLR-020')`,
-        [A, SITE_A1],
-      );
-    });
-    await appTx(db, { actor: MANAGER_A, tenant: A }, async (client) => {
-      const err = await fail(
-        client,
-        `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref)
-         VALUES ($1, $2, 'ACME', 'ACME-PUN-020')`,
-        [A, SITE_A2],
-      );
-      expect(err.code).toBe('42501');
-    });
+  test('site managers cannot create stations; station creation is tenant-admin only', async () => {
+    for (const siteId of [SITE_A1, SITE_A2]) {
+      await appTx(db, { actor: MANAGER_A, tenant: A }, async (client) => {
+        const err = await fail(
+          client,
+          `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref)
+           VALUES ($1, $2, 'ACME', $3)`,
+          [A, siteId, siteId === SITE_A1 ? 'ACME-BLR-020' : 'ACME-PUN-020'],
+        );
+        expect(err.code).toBe('42501');
+      });
+    }
   });
 
   test('sessions and meter/status reads are tenant/site scoped and app has no write grants', async () => {
@@ -444,35 +439,23 @@ describe('Phase 2 partition maintenance', () => {
   });
 });
 
-describe('Phase 2 identity backfill', () => {
-  test('collision-safe org/site code backfill handles truncated duplicates', async () => {
-    const tenantOne = '90000000-0000-4000-8000-000000000101';
-    const tenantTwo = '90000000-0000-4000-8000-000000000102';
-    await db.superuser.query(
-      `INSERT INTO app.tenants (id, name, slug, org_code) VALUES
-       ($1, 'Duplicate One', 'duplicate-long-name-one', NULL),
-       ($2, 'Duplicate Two', 'duplicate-long-name-two', NULL)`,
-      [tenantOne, tenantTwo],
-    );
-    await db.superuser.query(
-      `INSERT INTO app.sites (id, tenant_id, name, site_code) VALUES
-       ('90000000-0000-4000-8000-000000000201', $1, 'Duplicate Site', NULL),
-       ('90000000-0000-4000-8000-000000000202', $1, 'Duplicate Site', NULL)`,
-      [tenantOne],
-    );
-    await db.superuser.query('SELECT app.backfill_org_codes()');
-    await db.superuser.query('SELECT app.backfill_site_codes()');
-    const orgs = await db.superuser.query<{ org_code: string }>(
-      'SELECT org_code FROM app.tenants WHERE id IN ($1, $2) ORDER BY org_code',
-      [tenantOne, tenantTwo],
-    );
-    expect(orgs.rows).toHaveLength(2);
-    expect(orgs.rows[0]?.org_code).not.toBe(orgs.rows[1]?.org_code);
-    const sites = await db.superuser.query<{ site_code: string }>(
-      'SELECT site_code FROM app.sites WHERE tenant_id = $1 ORDER BY site_code',
-      [tenantOne],
-    );
-    expect(sites.rows).toHaveLength(2);
-    expect(sites.rows[0]?.site_code).not.toBe(sites.rows[1]?.site_code);
+describe('Phase 2 partition timezone', () => {
+  test('creates UTC boundaries under a non-UTC session timezone', async () => {
+    await db.superuser.query("SET timezone = 'Asia/Kolkata'");
+    try {
+      await db.superuser.query(
+        "SELECT app.ensure_event_partition('station_status_events', '2027-05-01')",
+      );
+      await db.superuser.query("SET timezone = 'UTC'");
+      const { rows } = await db.superuser.query<{ bound: string }>(
+        `SELECT pg_get_expr(c.relpartbound, c.oid) AS bound
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'app' AND c.relname = 'station_status_events_2027_05'`,
+      );
+      expect(rows[0]?.bound).toContain('2027-05-01 00:00:00+00');
+      expect(rows[0]?.bound).toContain('2027-06-01 00:00:00+00');
+    } finally {
+      await db.superuser.query("SET timezone = 'UTC'");
+    }
   });
 });

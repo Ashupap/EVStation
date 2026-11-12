@@ -33,28 +33,43 @@ export class CitrineOsAdapter implements CsmsAdapter {
         config.tokenUrl,
         config.provisionerClientId,
         config.provisionerClientSecret,
+        config.timeoutMs,
       ),
+      config.timeoutMs,
     );
     this.reader = new HasuraClient(
       config.hasuraUrl,
-      new TokenProvider(config.tokenUrl, config.readerClientId, config.readerClientSecret),
+      new TokenProvider(
+        config.tokenUrl,
+        config.readerClientId,
+        config.readerClientSecret,
+        config.timeoutMs,
+      ),
+      config.timeoutMs,
     );
     this.rest = new CitrineRestClient(
       config.baseUrl,
       config.authMode,
+      config.tenantId,
       new TokenProvider(
         config.tokenUrl,
         config.provisionerClientId,
         config.provisionerClientSecret,
+        config.timeoutMs,
       ),
+      config.timeoutMs,
     );
   }
 
   async registerStation(input: StationRegistrationInput): Promise<StationRegistrationResult> {
     const existing = await this.reader.query<{
-      ChargingStations: Array<{ id: number; capabilities?: { evstation_managed?: boolean } }>;
+      ChargingStations: Array<{
+        id: number;
+        locationId: number | null;
+        capabilities?: { evstation_managed?: boolean };
+      }>;
     }>(
-      `query($name: String!) { ChargingStations(where: {ocppConnectionName: {_eq: $name}}, limit: 1) { id capabilities } }`,
+      `query($name: String!) { ChargingStations(where: {ocppConnectionName: {_eq: $name}}, limit: 1) { id locationId capabilities } }`,
       { name: input.stationRef },
     );
     if (existing.ChargingStations.length > 0) {
@@ -65,12 +80,16 @@ export class CitrineOsAdapter implements CsmsAdapter {
           'CSMS_CONFLICT',
         );
       }
-      return {
-        csmsStationId: station.id,
-        csmsLocationId: input.csmsLocationId ?? 0,
-      };
+      if (!station.locationId) {
+        throw new CsmsError('CitrineOS station has no location mapping', 'CSMS_INVALID');
+      }
+      await this.ensureTopology(input, station.id);
+      return { csmsStationId: station.id, csmsLocationId: station.locationId };
     }
 
+    if (!input.csmsLocationId && input.latitude === undefined) {
+      throw new CsmsError('station location mapping or coordinates required', 'CSMS_INVALID');
+    }
     let locationId = input.csmsLocationId ?? null;
     if (!locationId) {
       const location = await this.provisioner.query<{ insert_Locations_one: { id: number } }>(
@@ -103,14 +122,35 @@ export class CitrineOsAdapter implements CsmsAdapter {
       },
     );
     const csmsStationId = station.insert_ChargingStations_one.id;
-    const evse = await this.provisioner.query<{ insert_Evses_one: { id: number } }>(
-      `mutation($stationId: Int!, $tenantId: Int!, $now: timestamptz!) {
-         insert_Evses_one(object: {stationId: $stationId, tenantId: $tenantId, evseId: "1", createdAt: $now, updatedAt: $now}) { id }
+    await this.ensureTopology(input, csmsStationId);
+    return { csmsStationId, csmsLocationId: locationId };
+  }
+
+  private async ensureTopology(input: StationRegistrationInput, stationId: number): Promise<void> {
+    const existing = await this.provisioner.query<{
+      Evses: Array<{ id: number; evseId: string | null }>;
+      Connectors: Array<{ id: number; connectorId: number }>;
+    }>(
+      `query($stationId: Int!) {
+         Evses(where: {stationId: {_eq: $stationId}}) { id evseId }
+         Connectors(where: {stationId: {_eq: $stationId}}) { id connectorId }
        }`,
-      { stationId: csmsStationId, tenantId: this.config.tenantId, now: new Date().toISOString() },
+      { stationId },
     );
+    let evseId = existing.Evses[0]?.id;
+    if (!evseId) {
+      const evse = await this.provisioner.query<{ insert_Evses_one: { id: number } }>(
+        `mutation($stationId: Int!, $tenantId: Int!, $now: timestamptz!) {
+           insert_Evses_one(object: {stationId: $stationId, tenantId: $tenantId, evseId: "1", createdAt: $now, updatedAt: $now}) { id }
+         }`,
+        { stationId, tenantId: this.config.tenantId, now: new Date().toISOString() },
+      );
+      evseId = evse.insert_Evses_one.id;
+    }
+    const existingNumbers = new Set(existing.Connectors.map((connector) => connector.connectorId));
     const connectors = input.connectors?.length ? input.connectors : [{ connectorNumber: 1 }];
     for (const connector of connectors) {
+      if (existingNumbers.has(connector.connectorNumber)) continue;
       await this.provisioner.query(
         `mutation($stationId: Int!, $evseId: Int!, $tenantId: Int!, $number: Int!, $now: timestamptz!) {
            insert_Connectors_one(object: {
@@ -119,15 +159,14 @@ export class CitrineOsAdapter implements CsmsAdapter {
            }) { id }
          }`,
         {
-          stationId: csmsStationId,
-          evseId: evse.insert_Evses_one.id,
+          stationId,
+          evseId,
           tenantId: this.config.tenantId,
           number: connector.connectorNumber,
           now: new Date().toISOString(),
         },
       );
     }
-    return { csmsStationId, csmsLocationId: locationId };
   }
 
   async provisionPassword(stationRef: string): Promise<string> {
@@ -145,6 +184,7 @@ export class CitrineOsAdapter implements CsmsAdapter {
         return value;
       } catch (error) {
         if (attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100 * 3 ** attempt));
       }
     }
     throw new CsmsError('CitrineOS password rotation incomplete', 'CSMS_UNAVAILABLE');
@@ -206,7 +246,9 @@ export class CitrineOsAdapter implements CsmsAdapter {
 
   async health(): Promise<CsmsHealth> {
     const [rest, hasura] = await Promise.allSettled([
-      fetch(`${this.config.baseUrl}/health`),
+      fetch(`${this.config.baseUrl}/health`, {
+        signal: AbortSignal.timeout(this.config.timeoutMs),
+      }),
       this.reader.query('query { __typename }'),
     ]);
     return {

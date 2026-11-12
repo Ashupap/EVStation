@@ -17,14 +17,30 @@ ALTER TABLE app.sites
 
 -- Backfill as superuser (owner would be blocked by FORCE RLS). Codes are
 -- derived once; the guard triggers below make them immutable afterwards.
-UPDATE app.tenants
-SET org_code = upper(substring(regexp_replace(slug, '[^a-z0-9]', '', 'g'), 1, 8))
-WHERE org_code IS NULL;
+WITH org_candidates AS (
+  SELECT id,
+         upper(substring(regexp_replace(slug, '[^a-z0-9]', '', 'g'), 1, 8)) AS base,
+         row_number() OVER (
+           PARTITION BY upper(substring(regexp_replace(slug, '[^a-z0-9]', '', 'g'), 1, 8))
+           ORDER BY created_at, id
+         ) AS duplicate_rank,
+         row_number() OVER (ORDER BY created_at, id) AS overall_rank
+  FROM app.tenants
+  WHERE org_code IS NULL
+)
+UPDATE app.tenants t
+SET org_code = CASE
+  WHEN length(c.base) >= 2 AND c.duplicate_rank = 1 THEN c.base
+  WHEN length(c.base) >= 6 THEN left(c.base, 6) || lpad(c.duplicate_rank::text, 2, '0')
+  ELSE 'T' || lpad(c.overall_rank::text, 7, '0')
+END
+FROM org_candidates c
+WHERE t.id = c.id;
 
-WITH candidates AS (
+WITH site_candidates AS (
   SELECT id,
          tenant_id,
-         upper(substring(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g'), 1, 6)) AS candidate,
+         upper(substring(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g'), 1, 6)) AS base,
          row_number() OVER (
            PARTITION BY tenant_id, upper(substring(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g'), 1, 6))
            ORDER BY created_at, id
@@ -35,10 +51,10 @@ WITH candidates AS (
 )
 UPDATE app.sites s
 SET site_code = CASE
-  WHEN c.duplicate_rank = 1 AND length(c.candidate) >= 2 THEN c.candidate
+  WHEN length(c.base) >= 2 AND c.duplicate_rank = 1 THEN c.base
   ELSE 'S' || lpad(c.tenant_rank::text, 5, '0')
 END
-FROM candidates c
+FROM site_candidates c
 WHERE s.id = c.id;
 
 SET ROLE evstation_owner;

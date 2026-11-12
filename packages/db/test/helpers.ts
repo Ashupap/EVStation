@@ -26,7 +26,7 @@ function urlFor(base: string, user: string, password: string) {
   return url.toString();
 }
 
-export async function startDb(): Promise<TestDb> {
+export async function startDb({ untilFile }: { untilFile?: string } = {}): Promise<TestDb> {
   const container = await new PostgreSqlContainer('postgis/postgis:16-3.5')
     .withUsername('evstation')
     .withPassword(SUPERUSER_PASSWORD)
@@ -37,6 +37,7 @@ export async function startDb(): Promise<TestDb> {
     migratorUrl,
     ownerPassword: OWNER_PASSWORD,
     appPassword: APP_PASSWORD,
+    ...(untilFile ? { untilFile } : {}),
   });
   const appUrl = urlFor(migratorUrl, 'evstation_app', APP_PASSWORD);
   const ownerUrl = urlFor(migratorUrl, 'evstation_owner', OWNER_PASSWORD);

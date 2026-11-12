@@ -11,6 +11,7 @@ export class TokenProvider {
     private readonly tokenUrl: string,
     private readonly clientId: string,
     private readonly clientSecret: string,
+    private readonly timeoutMs = 10_000,
   ) {}
 
   async get(): Promise<string> {
@@ -23,6 +24,7 @@ export class TokenProvider {
         client_id: this.clientId,
         client_secret: this.clientSecret,
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!response.ok) throw new CsmsError('CSMS service token rejected', 'CSMS_AUTH');
     const body = (await response.json()) as { access_token?: string; expires_in?: number };
@@ -35,11 +37,12 @@ export class TokenProvider {
   }
 }
 
-export async function localDevToken(baseUrl: string): Promise<string> {
+export async function localDevToken(baseUrl: string, timeoutMs = 10_000): Promise<string> {
   const response = await fetch(`${baseUrl}/dev/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ roles: ['admin'] }),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new CsmsError('CitrineOS localDev token rejected', 'CSMS_AUTH');
   const body = (await response.json()) as { accessToken?: string };

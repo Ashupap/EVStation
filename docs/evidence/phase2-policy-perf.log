@@ -348,3 +348,31 @@ Planning:
   Buffers: shared hit=191
 Planning Time: 1.006 ms
 Execution Time: 20.984 ms
+
+=== partition maintenance with one default-partition row (local dev, UTC) ===
+Timing is on.
+INSERT 0 1
+Time: 3.899 ms
+ ensure_event_partition 
+------------------------
+ 
+(1 row)
+
+Time: 30.613 ms
+ count 
+-------
+     0
+(1 row)
+
+Time: 0.922 ms
+Timing is off.
+
+=== notes ===
+Dataset: 1,000,001 sessions (900k Acme + 100k Beta + seeds), 1,000,000 meter values,
+1,000,000 status events across 2026-11..2027-01; 1,000 Acme sites plus the Beta site.
+The site-manager actor holds 1 of 1,000 Acme sites. Site-manager queries are slower
+because the RLS predicate filters the shared tenant index scan; this is the expected
+RLS skew limit (observed ~45-56 ms at the 1M-row partition). Tenant-admin keyset
+queries stay under ~8 ms.
+Partition maintenance with a row in the default partition: create/move/attach ~31 ms
+for ingestion_events (one row); see the timing section above.

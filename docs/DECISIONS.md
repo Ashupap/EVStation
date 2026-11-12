@@ -777,7 +777,10 @@ email)` owned by `evstation_definer` (atomic: membership insert +
   DELETE. Direct child access is denied; queries go through the parent RLS
   policies. A replay with the same event ref but a different envelope timestamp
   is intentionally not deduplicated; this limitation is documented in the
-  ingestion ADR for PR 2b.
+  ingestion ADR for PR 2b. Database/session timezone is pinned to UTC, and the
+  partition function uses explicit `AT TIME ZONE 'UTC'` boundaries. A dedicated
+  NOLOGIN/BYPASSRLS maintenance role limited to `ensure_event_partition` lands in
+  PR 2b; 2a invokes the function as the migration/superuser only.
 
 ## Known issues (Phase 2a)
 

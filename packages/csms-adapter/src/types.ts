@@ -48,7 +48,8 @@ export interface CsmsAdapter {
 export class CsmsError extends Error {
   constructor(
     message: string,
-    readonly code: 'CSMS_UNAVAILABLE' | 'CSMS_CONFLICT' | 'CSMS_AUTH' | 'CSMS_NOT_IMPLEMENTED',
+    readonly code:
+      'CSMS_UNAVAILABLE' | 'CSMS_CONFLICT' | 'CSMS_AUTH' | 'CSMS_INVALID' | 'CSMS_NOT_IMPLEMENTED',
   ) {
     super(message);
     this.name = 'CsmsError';

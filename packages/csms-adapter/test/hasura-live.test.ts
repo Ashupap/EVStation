@@ -47,19 +47,49 @@ describe.skipIf(!live)('live Hasura adapter role', () => {
       }`,
       { t: now, name: `LIVE-MARKER-${Date.now()}` },
     );
-    const data = result.body.data as { insert_ChargingStations_one?: { capabilities?: unknown } };
+    const data = result.body.data as {
+      insert_ChargingStations_one?: { id?: number; capabilities?: unknown };
+    };
     expect(data.insert_ChargingStations_one?.capabilities).toEqual({ evstation_managed: true });
+    const id = data.insert_ChargingStations_one?.id;
+    if (id) {
+      const remove = await gql(
+        token,
+        `mutation($id: Int!) {
+          update_ChargingStations_by_pk(pk_columns: {id: $id}, _set: {capabilities: {}}) { id }
+        }`,
+        { id },
+      );
+      expect(JSON.stringify(remove.body)).toMatch(/capabilities|not found|permission/i);
+    }
   });
 
-  it('cannot update an unowned cp001 station and cannot remove a marker', async () => {
+  it('cannot update an unowned cp001 station and cannot attach an EVSE to it', async () => {
     const token = await serviceToken();
+    const lookup = await gql(
+      token,
+      `query { ChargingStations(where: {ocppConnectionName: {_eq: "cp001"}}) { id } }`,
+    );
+    const id = (lookup.body.data as { ChargingStations?: Array<{ id: number }> })
+      .ChargingStations?.[0]?.id;
+    expect(id).toBeTruthy();
     const result = await gql(
       token,
-      `mutation {
-        update_ChargingStations_by_pk(pk_columns: {id: 2}, _set: {firmwareVersion: "should-not-write"}) { id firmwareVersion }
+      `mutation($id: Int!) {
+        update_ChargingStations_by_pk(pk_columns: {id: $id}, _set: {firmwareVersion: "should-not-write"}) { id firmwareVersion }
       }`,
+      { id },
     );
     expect(result.body.data).toEqual({ update_ChargingStations_by_pk: null });
+    const now = new Date().toISOString();
+    const evse = await gql(
+      token,
+      `mutation($id: Int!, $t: timestamptz!) {
+        insert_Evses_one(object: {stationId: $id, tenantId: 1, evseId: "9", createdAt: $t, updatedAt: $t}) { id }
+      }`,
+      { id, t: now },
+    );
+    expect(JSON.stringify(evse.body)).toMatch(/permission|check constraint|not allowed/i);
   });
 
   it('the CitrineOS unique ocppConnectionName constraint blocks duplicate provisioning', async () => {

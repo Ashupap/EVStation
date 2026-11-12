@@ -1356,6 +1356,18 @@ describe('database catalog invariants', () => {
       );
       expect(rows[0]?.ok, `${table}.${column} ${privilege}`).toBe(true);
     }
+    for (const column of [
+      'registration_status',
+      'registration_error',
+      'registration_attempts',
+      'last_registration_attempt_at',
+    ]) {
+      const { rows } = await db.superuser.query<{ ok: boolean }>(
+        'SELECT has_column_privilege($1, $2, $3, $4) AS ok',
+        ['evstation_app', 'app.stations', column, 'INSERT'],
+      );
+      expect(rows[0]?.ok, `stations.${column} INSERT`).toBe(false);
+    }
 
     const publicGrants = await db.superuser.query<{ table: string; privilege: string }>(
       `SELECT c.relname AS table, a.privilege_type AS privilege
