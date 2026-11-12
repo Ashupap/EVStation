@@ -753,3 +753,43 @@ email)` owned by `evstation_definer` (atomic: membership insert +
 - **Consequences.** Until 2b, event tables remain read-only/empty at the API
   layer and no CitrineOS event consumer exists. PR 2b is the pause point for
   ingestion + simulator E2E.
+
+### ADR-0025: Phase 2 event retention and monthly partitioning
+
+- **Context.** Session meter values, station status history and the ingestion
+  ledger grow continuously. Finance/legal require at least 12 months of meter
+  data; operational rejection data is shorter-lived.
+- **Decision.** `session_meter_values`, `station_status_events` and
+  `ingestion_events` are monthly range partitions keyed by the CitrineOS
+  envelope timestamp (`csms_timestamp`), with a default partition as a safety
+  net. Retention defaults: meter values at least 12 months (finance/legal will
+  confirm the final number), status events 90 days, ingestion ledger 30 days.
+  `idTag` is personal data under DPDP: it is never logged, is masked in API
+  projections by default, and is pseudonymized or nulled after the session
+  retention window.
+- **Maintenance.** `app.ensure_event_partition(parent, month)` is a
+  migration/superuser-invoked helper: it detaches the default partition, creates
+  the monthly partition, moves matching default rows with
+  `OVERRIDING SYSTEM VALUE`, reattaches the default, and applies
+  `ENABLE/FORCE RLS` plus `REVOKE` to the new child. It is not granted to the
+  app/worker roles.
+- **Consequences.** Dropping old data is a partition operation, not row-by-row
+  DELETE. Direct child access is denied; queries go through the parent RLS
+  policies. A replay with the same event ref but a different envelope timestamp
+  is intentionally not deduplicated; this limitation is documented in the
+  ingestion ADR for PR 2b.
+
+## Known issues (Phase 2a)
+
+1. Phase 1 tenant/site creation APIs do not yet require `org_code`/`site_code`;
+   Phase 2a station creation rejects missing codes. Follow-up API hardening
+   will make them required.
+2. Hasura v2.40.3 does not reliably enforce a JSONB `_contains` condition in an
+   insert `check`; the adapter overlay therefore uses a server-side
+   `set.capabilities = {evstation_managed: true}` preset plus an update/check
+   marker and a non-updatable `capabilities` column. The adapter never adopts a
+   station without the marker.
+3. Live Hasura permissions and Keycloak service-account tests run in the smoke
+   workflow, not in the required PR CI (they need the live stack).
+4. Ingest roles, AMQP consumer, SSE and session/meter ingestion are PR 2b/2c
+   scope; no ingest credentials are granted to the API or browser in 2a.
