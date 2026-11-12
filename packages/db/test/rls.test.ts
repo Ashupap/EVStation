@@ -178,22 +178,49 @@ describe('role attributes and object ownership', () => {
     }>(
       `SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'app' AND c.relkind = 'r' ORDER BY c.relname`,
+       WHERE n.nspname = 'app' AND c.relkind IN ('r', 'p')
+         AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid)
+       ORDER BY c.relname`,
     );
     expect(rows.map((row) => row.relname)).toEqual([
       'audit_log',
+      'connectors',
       'email_outbox',
+      'ingestion_events',
       'invitations',
       'membership_sites',
       'memberships',
+      'pending_transaction_starts',
       'platform_admins',
+      'session_meter_values',
+      'sessions',
       'sites',
+      'station_runtime_state',
+      'station_status_events',
+      'stations',
       'tenants',
       'users',
     ]);
     for (const row of rows) {
       expect(row.relrowsecurity).toBe(true);
       expect(row.relforcerowsecurity).toBe(true);
+    }
+
+    const partitions = await db.superuser.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'app' AND c.relkind = 'r'
+         AND EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid)
+       ORDER BY c.relname`,
+    );
+    expect(partitions.rows.length).toBeGreaterThan(0);
+    for (const row of partitions.rows) {
+      expect(row.relrowsecurity, row.relname).toBe(true);
+      expect(row.relforcerowsecurity, row.relname).toBe(true);
     }
 
     const asOwner = await db.owner.query<{ n: string }>(
@@ -216,6 +243,12 @@ describe('fail-closed context', () => {
         'invitations',
         'audit_log',
         'email_outbox',
+        'stations',
+        'station_runtime_state',
+        'connectors',
+        'sessions',
+        'session_meter_values',
+        'station_status_events',
       ]) {
         expect(await count(client, table)).toBe(0);
       }
@@ -1270,11 +1303,19 @@ describe('database catalog invariants', () => {
   test('app table privileges are the least-privilege matrix; PUBLIC has none', async () => {
     const expected: Record<string, string[]> = {
       audit_log: ['SELECT', 'INSERT'],
+      connectors: ['SELECT'],
+      ingestion_events: [],
       invitations: ['SELECT'],
       membership_sites: ['SELECT', 'INSERT', 'DELETE'],
       memberships: ['SELECT', 'INSERT', 'DELETE'],
+      pending_transaction_starts: [],
       platform_admins: ['SELECT'],
+      session_meter_values: ['SELECT'],
+      sessions: ['SELECT'],
       sites: ['SELECT', 'INSERT', 'DELETE'],
+      station_runtime_state: ['SELECT'],
+      station_status_events: ['SELECT'],
+      stations: ['SELECT'],
       tenants: ['SELECT', 'INSERT'],
       users: ['SELECT'],
     };
@@ -1301,6 +1342,21 @@ describe('database catalog invariants', () => {
       "SELECT has_column_privilege('evstation_app', 'app.invitations', 'email', 'INSERT') AS ok",
     );
     expect(invitationInsert.rows[0]?.ok).toBe(true);
+
+    const columnGrants: Array<[string, string, string]> = [
+      ['stations', 'station_ref', 'INSERT'],
+      ['stations', 'registration_status', 'UPDATE'],
+      ['connectors', 'connector_number', 'INSERT'],
+      ['connectors', 'last_status_at', 'UPDATE'],
+      ['sites', 'csms_location_id', 'UPDATE'],
+    ];
+    for (const [table, column, privilege] of columnGrants) {
+      const { rows } = await db.superuser.query<{ ok: boolean }>(
+        'SELECT has_column_privilege($1, $2, $3, $4) AS ok',
+        ['evstation_app', `app.${table}`, column, privilege],
+      );
+      expect(rows[0]?.ok, `${table}.${column} ${privilege}`).toBe(true);
+    }
 
     const publicGrants = await db.superuser.query<{ table: string; privilege: string }>(
       `SELECT c.relname AS table, a.privilege_type AS privilege

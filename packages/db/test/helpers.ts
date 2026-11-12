@@ -54,7 +54,10 @@ export async function stopDb(db: TestDb) {
 
 export async function resetDb(db: TestDb) {
   await db.superuser.query(
-    `TRUNCATE app.email_outbox, app.audit_log, app.invitations,
+    `TRUNCATE app.ingestion_events, app.pending_transaction_starts,
+       app.station_status_events, app.session_meter_values, app.sessions,
+       app.connectors, app.station_runtime_state, app.stations,
+       app.email_outbox, app.audit_log, app.invitations,
        app.membership_sites, app.memberships, app.sites, app.platform_admins,
        app.users, app.tenants CASCADE`,
   );

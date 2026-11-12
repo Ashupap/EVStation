@@ -40,8 +40,8 @@ export async function seedDev({ migratorUrl }) {
     await client.query('BEGIN');
 
     await client.query(
-      `INSERT INTO app.tenants (id, name, slug)
-       VALUES ($1, 'Acme Charging', 'acme'), ($2, 'Beta Mobility', 'beta')
+      `INSERT INTO app.tenants (id, name, slug, org_code)
+       VALUES ($1, 'Acme Charging', 'acme', 'ACME'), ($2, 'Beta Mobility', 'beta', 'BETA')
        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
       [SEED_IDS.acmeTenant, SEED_IDS.betaTenant],
     );
@@ -64,10 +64,10 @@ export async function seedDev({ migratorUrl }) {
     );
 
     await client.query(
-      `INSERT INTO app.sites (id, tenant_id, name, address)
-       VALUES ($1, $3, 'Acme Hub — Bengaluru', 'Bengaluru, KA'),
-              ($2, $3, 'Acme Depot — Pune', 'Pune, MH'),
-              ($4, $5, 'Beta Hub — Mumbai', 'Mumbai, MH')
+      `INSERT INTO app.sites (id, tenant_id, name, address, site_code)
+       VALUES ($1, $3, 'Acme Hub — Bengaluru', 'Bengaluru, KA', 'BLR'),
+              ($2, $3, 'Acme Depot — Pune', 'Pune, MH', 'PUN'),
+              ($4, $5, 'Beta Hub — Mumbai', 'Mumbai, MH', 'BOM')
        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, address = EXCLUDED.address`,
       [
         SEED_IDS.acmeSite1,
