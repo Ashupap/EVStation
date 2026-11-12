@@ -932,7 +932,7 @@ export const ROUTES: RouteDefinition[] = [
         );
       }
       await client.query('COMMIT');
-      const lock = await db.pool.connect();
+      const lock = client;
       try {
         await lock.query('SELECT pg_advisory_lock(hashtext($1))', [row.station_ref]);
         let credentials: string;
@@ -995,7 +995,6 @@ export const ROUTES: RouteDefinition[] = [
         await lock
           .query('SELECT pg_advisory_unlock(hashtext($1))', [row.station_ref])
           .catch(() => undefined);
-        lock.release();
       }
     },
   },
