@@ -16,10 +16,18 @@ An EV charging Central Management System (CMS) for India, built on top of
 **Phase 0 (repository & infrastructure bootstrap) — complete.** Tagged
 `phase-0-complete`.
 
-**Phase 1 (authentication, tenants and row-level security) — implementation
-complete; PR #2 is awaiting final reviewer sign-off.** The acceptance matrix is
-in [docs/PHASE1_ACCEPTANCE.md](docs/PHASE1_ACCEPTANCE.md); deferred items and
-operational limits are listed under [Known issues](#known-issues).
+**Phase 1 (authentication, tenants and row-level security) — complete.**
+Tagged `phase-1-complete`; see [docs/PHASE1_ACCEPTANCE.md](docs/PHASE1_ACCEPTANCE.md).
+
+**Phase 2a/2b (station registry, CitrineOS adapter, AMQP ingestion worker,
+tenant-scoped session/event reads) — complete.** Tagged `phase-2a-complete`
+and `phase-2b-complete`.
+
+**Phase 2c (SSE realtime events, Phase 2 documentation and acceptance) —
+implementation on `phase2c/sse`, awaiting review.** See
+[docs/PHASE2_ACCEPTANCE.md](docs/PHASE2_ACCEPTANCE.md),
+[docs/API_EVENTS.md](docs/API_EVENTS.md), and
+[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 Proven in Phase 0:
 
@@ -137,6 +145,9 @@ docs                   PRD, ARCHITECTURE, DECISIONS (ADRs), RUNBOOK, evidence
 - [Product requirements](docs/PRD.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Phase 1 acceptance matrix](docs/PHASE1_ACCEPTANCE.md)
+- [Phase 2 acceptance matrix](docs/PHASE2_ACCEPTANCE.md)
+- [Realtime event schema](docs/API_EVENTS.md)
+- [Known issues](docs/KNOWN_ISSUES.md)
 - [Decisions (ADRs) & known issues](docs/DECISIONS.md)
 - [Runbook](docs/RUNBOOK.md) — ports, health, first station bring-up, smoke, troubleshooting
 - [Simulator](tools/simulator/README.md)

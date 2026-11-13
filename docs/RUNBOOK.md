@@ -348,3 +348,42 @@ worker to finish the session, meter samples and boot fields.
   the local Hasura console), or reset state with
   `pnpm dev:stack:down --volumes && pnpm dev:stack` followed by `pnpm smoke`
   (fixtures are recreated automatically).
+
+## SSE operations
+
+`GET /api/events` is the dashboard BFF stream; the API owns `GET /events`.
+Metrics are exposed by the API `/metrics` endpoint:
+`sse_connections`, `events_notified`, `events_dropped_not_visible`,
+`reread_p50_ms`, `reread_p95_ms`, `resyncs`, `backpressure_closes`, and
+`notification_queue_usage`.
+
+Limits are 10 streams/user, 250/tenant, and 2,000 per API process; check the
+process fd limit before raising them. The API does not replay events: after a
+LISTEN reconnect or `Last-Event-ID` it sends `event: resync`; clients refetch.
+
+Deploy behind an ingress that disables buffering and compression for SSE:
+
+```nginx
+location = /api/events {
+  proxy_pass http://dashboard;
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_buffering off;
+  proxy_cache off;
+  gzip off;
+  chunked_transfer_encoding on;
+  add_header X-Accel-Buffering no;
+}
+```
+
+The app sends `X-Accel-Buffering: no` and `Cache-Control: no-transform`.
+Deploy smoke must assert the first SSE chunk arrives within 2 s through the real
+ingress.
+
+RabbitMQ queue arguments are immutable: after changing the 5 GiB
+`reject-publish` definition, delete `evstation.ingest` and
+`evstation.ingest.retry`, then run `node scripts/provision-amqp.mjs` (or apply
+`infra/compose/rabbitmq/evstation-ingest-definitions.json`). Ensure no unacked
+billing events exist before deleting the queue. `reject-publish` without
+publisher confirms can still lose messages; alert on `queue_depth_high` and
+consumer lag.

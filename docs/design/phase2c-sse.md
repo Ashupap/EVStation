@@ -247,67 +247,48 @@ for a station the user's site scope excludes. A connection must never receive
 another tenant's event even if the NOTIFY payload is spoofed with a foreign
 tenant id.
 
-## 12. Proposed migration 0034 (not applied)
+## 12. Migration 0034 (implemented on the 2c branch, not merged)
 
-Numbering starts at `0034`; `0028` remains an intentional gap. This is a
-sketch for review, not a migration file yet.
+Numbering starts at `0034`; `0028` remains an intentional gap. The implemented
+file is `packages/db/sql/0034_phase2c_sse_notifications.sql`. It adds
+`sessions.last_meter_notify_at`, the plain `LANGUAGE sql` `notify_event`
+helper (no `SECURITY DEFINER`, owned by `evstation_ingest_definer`, no event_ref
+in the payload), the atomically throttled meter update, and notify call sites
+for connection transitions, status, session start/update/end/meter, sweep,
+stale close and expiry. Existing ingest/job functions keep their 0032/0033
+owners. The function-body diff evidence is
+`docs/evidence/phase2c-0034-function-diff.log`; all existing DB tests pass
+unmodified.
 
 ```sql
--- 0034_phase2c_sse_notifications.sql (proposed; not applied)
-ALTER TABLE app.sessions
-  ADD COLUMN IF NOT EXISTS last_meter_notify_at timestamptz;
+ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS last_meter_notify_at timestamptz;
+GRANT UPDATE (last_meter_notify_at) ON app.sessions TO evstation_ingest_definer;
 
 CREATE OR REPLACE FUNCTION app.notify_event(
-  p_kind text,
-  p_tenant_id uuid,
-  p_site_id uuid,
-  p_station_id uuid,
-  p_session_id uuid,
-  p_occurred_at timestamptz,
-  p_event_ref text,
-  p_event_id uuid DEFAULT gen_random_uuid()
+  p_kind text, p_tenant_id uuid, p_site_id uuid, p_station_id uuid,
+  p_session_id uuid, p_occurred_at timestamptz, p_event_id uuid DEFAULT gen_random_uuid()
 ) RETURNS void
-LANGUAGE sql SECURITY DEFINER
+LANGUAGE sql
 SET search_path = pg_catalog, app, pg_temp
 AS $$
-  SELECT pg_notify(
-    'evstation_events',
-    jsonb_build_object(
-      'v', 1, 'id', p_event_id, 'kind', p_kind,
-      'tenant_id', p_tenant_id, 'site_id', p_site_id,
-      'station_id', p_station_id, 'session_id', p_session_id,
-      'occurred_at', p_occurred_at, 'event_ref', left(p_event_ref, 256)
-    )::text
-  );
+  SELECT pg_notify('evstation_events', jsonb_build_object(
+    'v', 1, 'id', p_event_id, 'kind', p_kind,
+    'tenant_id', p_tenant_id, 'site_id', p_site_id,
+    'station_id', p_station_id, 'session_id', p_session_id,
+    'occurred_at', p_occurred_at
+  )::text)
 $$;
-ALTER FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,text,uuid)
+ALTER FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid)
   OWNER TO evstation_ingest_definer;
-REVOKE ALL ON FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,text,uuid)
-  FROM PUBLIC;
+REVOKE ALL ON FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid) FROM PUBLIC;
 
--- Representative call sites (full CREATE OR REPLACE bodies in the actual migration):
--- station.connection: after UPDATE ... RETURNING connection_state; only if state changed
---   PERFORM app.notify_event('station.connection', s.tenant_id, s.site_id, s.id, NULL,
---     p_csms_timestamp, p_event_ref);
--- station.status: after successful status insert
---   PERFORM app.notify_event('station.status', s.tenant_id, s.site_id, s.id, NULL,
---     p_csms_timestamp, p_event_ref);
--- session.started: after accepted start-response INSERT
---   PERFORM app.notify_event('session.started', p.tenant_id, p.site_id, p.station_id,
---     v_session_id, p_csms_timestamp, p_event_ref);
--- session.meter: only when the 5 s throttle slot wins
---   UPDATE app.sessions SET last_meter_notify_at=p_csms_timestamp ...
---   PERFORM app.notify_event('session.meter', sess.tenant_id, sess.site_id,
---     sess.station_id, sess.id, p_csms_timestamp, p_event_ref);
--- session.ended: after StopTransaction/stale close/supersede
---   PERFORM app.notify_event('session.ended', ...);
--- Plain Heartbeat: no app.notify_event call.
+-- Meter throttle (one atomic UPDATE; NOTIFY only when it returns a throttled row):
+UPDATE app.sessions
+SET energy_wh = greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)),
+    last_meter_notify_at = CASE WHEN ... THEN p_csms_timestamp ELSE last_meter_notify_at END
+WHERE id = sess.id
+RETURNING (last_meter_notify_at = p_csms_timestamp) INTO v_notify;
 ```
-
-The existing functions stay SECURITY DEFINER and owned by
-`evstation_ingest_definer`; 0034 only adds the column and replaces bodies.
-`evstation_ingest` gets no new table privileges; the worker gets only
-`UPDATE (last_meter_notify_at)` if the function owner does not already have it.
 
 ## 13. Spikes (completed)
 
@@ -354,8 +335,8 @@ The existing functions stay SECURITY DEFINER and owned by
   keeps impersonation out of Phase 1 scope (only the audit marker exists).
 - The Phase 1 known-issues list is not yet consolidated; Phase 2c creates
   `docs/KNOWN_ISSUES.md` with both phases.
-- `gitleaks` has not been run in this repo and no report exists; run it before
-  the Phase 2c implementation PR.
+- `gitleaks` was run over full history on 2026-11-13: 69 commits scanned, no
+  leaks found (`docs/evidence/gitleaks-report.json`, `gitleaks-run.log`).
 - The `returnTo` open-redirect check is covered by
   `apps/dashboard/test/e2e/dashboard.spec.ts` (malicious `//evil.example`) and
   `apps/dashboard/test/csrf.test.ts`; both pass in CI. No separate manual

@@ -881,3 +881,89 @@ charger_reported_at)` because sample replay can arrive with a new envelope.
 7. `evstation_worker_events_parked_total` currently increments only for
    handler-thrown `POISON` parking. `RETRY_EXHAUSTED` parking is in the ledger
    but is counted as an ack, so the metric under-reports that path.
+
+### ADR-0028: Platform admins cannot open tenant SSE streams in 2c
+
+- **Context.** Platform admin acting-as is deferred (ADR-0018). An SSE stream
+  outlives a single request, so silently choosing a tenant would turn a
+  deferred impersonation feature into a new authorization path.
+- **Decision.** `GET /events` returns `403 PLATFORM_ADMIN_NOT_SUPPORTED` for
+  platform admins in 2c. Tenant admins/site managers/viewers use their selected
+  tenant membership only. Acting-as remains deferred to a future audited
+  feature.
+- **Consequences.** Platform admins use tenant-scoped read pages or a future
+  acting-as token exchange; they cannot receive cross-tenant streams.
+
+### ADR-0029: SSE browser auth uses the dashboard BFF
+
+- **Context.** `EventSource` cannot set an Authorization header, and query
+  strings leak tokens into logs/history.
+- **Decision.** The browser opens same-origin `GET /api/events`; the dashboard
+  BFF reads the HttpOnly session cookie, refreshes the access token
+  server-side, and streams from API `/events` with a server-only Bearer token.
+  The BFF validates same-origin fetch metadata, sets `retry:` with jitter, and
+  aborts the upstream request when the browser disconnects. No token/session id
+  is accepted in a query string.
+- **Consequences.** SSE shares the Phase 1 session trust boundary. The BFF
+  route must disable buffering/compression and must be reachable only through
+  the trusted proxy.
+
+### ADR-0030: NOTIFY carries IDs; API does one RLS re-read per event
+
+- **Context.** Postgres NOTIFY is limited to 8000 bytes and must not carry
+  PII/idTag or become a second authorization path.
+- **Decision.** Channel `evstation_events` carries only version, event id,
+  kind, tenant/site/station/session ids, and occurred_at. The API holds the
+  connection scope in memory, performs one `evstation_app` re-read with
+  `app.actor_id` from a connection whose scope covers the payload and
+  `app.tenant_id` from the payload, then fans out by the **re-read row's**
+  tenant/site. RLS is the tenant gate; memory is the site gate. Invisible rows
+  are dropped.
+- **Consequences.** No event payload can spoof data; a rolled-back transaction
+  never notifies. Missed events are not replayed; `resync` tells clients to
+  refetch.
+
+### ADR-0031: SSE events are snapshots with FIFO ordering and bounded buffers
+
+- **Context.** Multiple updates can arrive out of order or faster than a client
+  can consume; the API must not hold a DB transaction or unbounded memory for
+  a stream.
+- **Decision.** Every event data object includes `updated_at`; clients apply
+  last-write-wins per entity and preserve FIFO per `session_id`/`station_id`.
+  The API bounds per-connection buffering (256 KiB), limits streams to 10/user,
+  250/tenant, 2,000/process, disconnects slow clients with `backpressure`, and
+  sends keepalive comments every 15 s. It never takes a pooled DB connection
+  for the lifetime of a stream; the only long-lived client is LISTEN.
+- **Consequences.** Backpressure is explicit rather than silently growing
+  memory. Metrics expose connections, drops, resyncs, backpressure closes,
+  re-read p50/p95, and notification queue usage.
+
+### ADR-0032: Ingest queue capacity uses a byte cap and monitoring-only user
+
+- **Context.** A depth cap with `drop-head` could silently discard billing
+  events; a retry dead-letter back through `messages` would reach CitrineOS's
+  consumers. The worker user cannot query the management API for lag.
+- **Decision.** The main queue uses a 5 GiB byte cap and `reject-publish` (not
+  `drop-head`); retry dead-letters to the default exchange with routing key
+  `evstation.ingest`. A separate `evstation_monitor` management user reports
+  depth; unavailable depth is `NaN` with `queue_depth_available=0`, never 0.
+  The queue definition is committed in
+  `infra/compose/rabbitmq/evstation-ingest-definitions.json`. Reject-publish
+  without publisher confirms can still lose a message, so the depth alert is
+  the real control.
+- **Consequences.** Operators must delete/redeclare queues when queue arguments
+  change; RUNBOOK documents the procedure.
+
+### ADR-0033: SSE scope refresh, token expiry, and LISTEN reconnect
+
+- **Context.** Scope changes and token expiry must close streams promptly;
+  LISTEN connections can be half-open or drop.
+- **Decision.** Scope is refreshed every 30 s; token expiry also closes via a
+  timer at JWT `exp`. Terminal reasons (`membership_removed`, `role_demoted`,
+  `tenant_suspended`, `site_scope_lost`) make the browser call `es.close()`;
+  `token_expired`/`server_shutdown` reconnect with jitter. Each API instance
+  has one dedicated LISTEN client, pings it every 15 s, reconnects with
+  exponential backoff, and sends `resync` only after the new LISTEN is
+  confirmed. No replay/event log.
+- **Consequences.** Revocation latency is bounded by 30 s plus jitter. Multi-
+  instance fan-out is local; each instance sees every NOTIFY.
