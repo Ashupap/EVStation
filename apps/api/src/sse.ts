@@ -20,7 +20,6 @@ interface Connection {
   scope: Scope;
   response: FastifyReply;
   raw: FastifyReply['raw'];
-  chain: Promise<void>;
   closed: boolean;
   refreshFailures: number;
   keepalive?: NodeJS.Timeout;
@@ -232,7 +231,6 @@ export class SseHub {
       scope,
       response: reply,
       raw: reply.raw,
-      chain: Promise.resolve(),
       closed: false,
       refreshFailures: 0,
     };
@@ -550,17 +548,15 @@ export class SseHub {
 
   private sendRaw(connection: Connection, frame: string): void {
     if (connection.closed) return;
-    if (connection.raw.writableLength > this.maxBufferBytes) {
-      this.metrics.backpressureCloses += 1;
-      this.closeConnection(connection, 'backpressure');
-      return;
+    try {
+      const writable = connection.raw.write(frame);
+      if (!writable || connection.raw.writableLength > this.maxBufferBytes) {
+        this.metrics.backpressureCloses += 1;
+        this.closeConnection(connection, 'backpressure');
+      }
+    } catch {
+      this.closeConnection(connection, 'write_error');
     }
-    connection.chain = connection.chain
-      .then(async () => {
-        if (connection.closed) return;
-        connection.response.raw.write(frame);
-      })
-      .catch(() => this.closeConnection(connection, 'write_error'));
   }
 
   private closeConnection(connection: Connection, reason: string): void {

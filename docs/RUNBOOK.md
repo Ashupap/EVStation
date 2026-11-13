@@ -387,3 +387,7 @@ RabbitMQ queue arguments are immutable: after changing the 5 GiB
 billing events exist before deleting the queue. `reject-publish` without
 publisher confirms can still lose messages; alert on `queue_depth_high` and
 consumer lag.
+
+### SSE backpressure on real networks
+
+The per-connection byte cap is a user-space control. Kernel socket buffers can absorb frames before `writableLength` grows, so a slow client is cut off when the user-space buffer fills, not instantly. The deterministic hub test proves the policy; the raw-net check is best-effort because loopback/kernel buffering varies.

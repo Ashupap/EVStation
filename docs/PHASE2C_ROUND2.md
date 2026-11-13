@@ -15,3 +15,8 @@
 | Minor open cleanup/BFF failed upstream/hook 401 handling                | Partial      | open cleanup + BFF 502 done; hook session-expired handling remains                                                          |
 | Remove duplicate 0034 ADD COLUMN                                        | Done         | 0034                                                                                                                        |
 | S2 invisible/concurrent                                                 | Done         | `docs/evidence/phase2c-s2-rls-reread.log`                                                                                   |
+
+| Extra: email_invalid refresh bug | Fixed | 930920e/acd4618; `sse-revocation.test.ts` membership_removed |
+| Extra: close-frame flush | Fixed | dcecd83; raw transcript `phase2c-revocation-transcript.log` |
+| Extra: harness chunk/keepalive bug | Fixed | 9524703; shared `SseStream` helper |
+| Extra: per-connection write chain removed | Fixed | sync `sendRaw`; `sse-backpressure.test.ts` |
