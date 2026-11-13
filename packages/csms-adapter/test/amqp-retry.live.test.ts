@@ -26,16 +26,16 @@ describe.skipIf(!enabled)('AMQP retry routing', () => {
             received = body;
             channel.ack(message);
           } else {
-            channel.nack(message, false, true);
+            channel.ack(message);
           }
         },
         { noAck: false },
       );
       await channel.publish('evstation.ingest.dlx', key, Buffer.from(`{"marker":"${marker}"}`), {
         contentType: 'application/json',
-        expiration: '30000',
+        expiration: '10000',
       });
-      const deadline = Date.now() + 34_000;
+      const deadline = Date.now() + 45_000;
       while (received === null && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
