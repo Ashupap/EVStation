@@ -22,6 +22,7 @@ interface Connection {
   raw: FastifyReply['raw'];
   chain: Promise<void>;
   closed: boolean;
+  refreshFailures: number;
   keepalive?: NodeJS.Timeout;
   refresh?: NodeJS.Timeout;
   expiry?: NodeJS.Timeout;
@@ -101,11 +102,41 @@ export interface SseMetrics {
   rereadMs: number[];
 }
 
+export function classifyRefreshError(error: unknown): 'access_denied' | 'transient' | 'unknown' {
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : '';
+  if (['42501', '28000', '28P01', 'P0001'].includes(code)) return 'access_denied';
+  if (
+    [
+      'ECONNRESET',
+      'ECONNREFUSED',
+      'ETIMEDOUT',
+      'EAI_AGAIN',
+      '57P01',
+      '57P02',
+      '57P03',
+      '53300',
+      '08000',
+      '08001',
+      '08003',
+      '08006',
+      '40001',
+      '40P01',
+    ].includes(code)
+  ) {
+    return 'transient';
+  }
+  return 'unknown';
+}
+
 export class SseHub {
   private readonly connections = new Map<string, Connection>();
   private readonly refreshMs = positiveEnv('SSE_REFRESH_MS', 30_000);
   private readonly keepaliveMs = positiveEnv('SSE_KEEPALIVE_MS', 15_000);
   private readonly maxBufferBytes = positiveEnv('SSE_MAX_BUFFER_BYTES', 256 * 1024);
+  private readonly maxRefreshFailures = positiveEnv('SSE_MAX_REFRESH_FAILURES', 3);
   private listener: pg.Client | null = null;
   private listenerStopping = false;
   private listenerRetry = 1_000;
@@ -199,6 +230,7 @@ export class SseHub {
       raw: reply.raw,
       chain: Promise.resolve(),
       closed: false,
+      refreshFailures: 0,
     };
     this.connections.set(id, connection);
     try {
@@ -535,17 +567,21 @@ export class SseHub {
     if (connection.keepalive) clearTimeout(connection.keepalive);
     if (connection.refresh) clearTimeout(connection.refresh);
     if (connection.expiry) clearTimeout(connection.expiry);
-    if (reason !== 'client_closed' && reason !== 'client_error') {
-      try {
-        connection.response.raw.write(`event: closed\ndata: ${JSON.stringify({ reason })}\n\n`);
-      } catch {
-        /* socket already gone */
+    const frame = `event: closed\ndata: ${JSON.stringify({ reason })}\n\n`;
+    try {
+      if (reason === 'client_closed' || reason === 'client_error') {
+        connection.response.raw.end();
+      } else if (reason === 'backpressure') {
+        connection.response.raw.write(frame);
+        setTimeout(() => connection.response.raw.destroy(), 10).unref();
+      } else {
+        connection.response.raw.end(frame);
+        setTimeout(() => {
+          if (!connection.response.raw.destroyed) connection.response.raw.destroy();
+        }, 250).unref();
       }
-    }
-    if (reason === 'backpressure') {
+    } catch {
       connection.response.raw.destroy();
-    } else {
-      connection.response.raw.end();
     }
   }
 
@@ -561,7 +597,7 @@ export class SseHub {
         await setTenantContext(client, connection.scope.tenantId);
         const principal = await loadPrincipal(client, {
           sub: connection.scope.actorId,
-          email: '',
+          email: connection.scope.email,
           email_verified: true,
         });
         const membership = principal.memberships.find(
