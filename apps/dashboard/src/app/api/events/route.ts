@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
-import { getServerSession } from '@/lib/auth';
-import { loadDashboardConfig } from '@/lib/config';
+import { getServerSession } from '../../../lib/auth';
+import { loadDashboardConfig } from '../../../lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,7 +8,13 @@ function retryDelay(): number {
   return 3_000 + Math.floor(Math.random() * 2_000);
 }
 
-export async function GET(request: NextRequest) {
+type SessionProvider = typeof getServerSession;
+
+export async function eventsHandler(
+  request: NextRequest,
+  sessionProvider: SessionProvider = getServerSession,
+  fetchImpl: typeof fetch = fetch,
+) {
   const site = request.headers.get('sec-fetch-site');
   if (site && site !== 'same-origin' && site !== 'none') {
     return new Response(
@@ -19,7 +25,7 @@ export async function GET(request: NextRequest) {
       },
     );
   }
-  const session = await getServerSession();
+  const session = await sessionProvider();
   if (!session) {
     return new Response(
       JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'sign in required' } }),
@@ -36,7 +42,7 @@ export async function GET(request: NextRequest) {
 
   let upstream: Response;
   try {
-    upstream = await fetch(new URL('/events', `${config.apiBaseUrl}/`), {
+    upstream = await fetchImpl(new URL('/events', `${config.apiBaseUrl}/`), {
       method: 'GET',
       signal: controller.signal,
       cache: 'no-store',
@@ -100,4 +106,8 @@ export async function GET(request: NextRequest) {
       connection: 'keep-alive',
     },
   });
+}
+
+export async function GET(request: NextRequest) {
+  return eventsHandler(request);
 }
