@@ -1,3 +1,4 @@
+import net from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   SEED_IDS,
@@ -106,22 +107,40 @@ async function readUntil(
 
 describe('SSE membership revocation repro', () => {
   it('closes with membership_removed within two refresh intervals', async () => {
-    const viewer = await open('viewerA');
     const admin = await open('adminA');
+    const port = Number(new URL(baseUrl).port);
+    const socket = net.connect(port, '127.0.0.1');
+    const transcript: Array<{ ms: number; text: string }> = [];
+    const started = Date.now();
+    socket.on('data', (chunk) =>
+      transcript.push({ ms: Date.now() - started, text: chunk.toString() }),
+    );
+    socket.write(
+      `GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer viewerA\r\nX-Tenant-Id: ${SEED_IDS.acmeTenant}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n`,
+    );
     try {
+      const connectedDeadline = Date.now() + 2_000;
+      while (
+        !transcript.some((entry) => entry.text.includes(': connected')) &&
+        Date.now() < connectedDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       await db.superuser.query('DELETE FROM app.memberships WHERE user_id=$1 AND tenant_id=$2', [
         SEED_IDS.acmeViewer,
         SEED_IDS.acmeTenant,
       ]);
-      const text = await readUntil(viewer.reader, viewer.decoder, 'membership_removed', 2_500);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      const text = transcript.map((entry) => entry.text).join('');
+      console.log('TRANSCRIPT', JSON.stringify(transcript));
+      expect(text).toContain(': connected');
       expect(text).toContain('event: closed');
       expect(text).toContain('membership_removed');
       const healthy = await readUntil(admin.reader, admin.decoder, 'event: closed', 600);
-      expect(healthy).toBe('');
+      expect(healthy).not.toContain('event: closed');
     } finally {
-      viewer.controller.abort();
+      socket.destroy();
       admin.controller.abort();
-      await viewer.reader.cancel().catch(() => undefined);
       await admin.reader.cancel().catch(() => undefined);
     }
   }, 10_000);
