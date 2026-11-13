@@ -40,9 +40,14 @@ interface NotifyPayload {
 }
 
 const CHANNEL = 'evstation_events';
-const MAX_BUFFER_BYTES = 256 * 1024;
-const KEEPALIVE_MS = 15_000;
-const REFRESH_MS = 30_000;
+function positiveEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`);
+  return value;
+}
+
 const MAX_PER_USER = Number(process.env.SSE_MAX_PER_USER ?? '10');
 const MAX_PER_TENANT = Number(process.env.SSE_MAX_PER_TENANT ?? '250');
 const MAX_PER_PROCESS = Number(process.env.SSE_MAX_PROCESS ?? '2000');
@@ -98,6 +103,9 @@ export interface SseMetrics {
 
 export class SseHub {
   private readonly connections = new Map<string, Connection>();
+  private readonly refreshMs = positiveEnv('SSE_REFRESH_MS', 30_000);
+  private readonly keepaliveMs = positiveEnv('SSE_KEEPALIVE_MS', 15_000);
+  private readonly maxBufferBytes = positiveEnv('SSE_MAX_BUFFER_BYTES', 256 * 1024);
   private listener: pg.Client | null = null;
   private listenerStopping = false;
   private listenerRetry = 1_000;
@@ -215,10 +223,13 @@ export class SseHub {
       this.sendRaw(connection, ': keepalive\n\n');
       connection.keepalive = setTimeout(
         keepalive,
-        KEEPALIVE_MS + Math.floor(Math.random() * 2_000),
+        this.keepaliveMs + Math.floor(Math.random() * (this.keepaliveMs / 10)),
       );
     };
-    connection.keepalive = setTimeout(keepalive, KEEPALIVE_MS + Math.floor(Math.random() * 2_000));
+    connection.keepalive = setTimeout(
+      keepalive,
+      this.keepaliveMs + Math.floor(Math.random() * (this.keepaliveMs / 10)),
+    );
     const scheduleRefresh = () => {
       if (connection.closed) return;
       connection.refresh = setTimeout(
@@ -226,7 +237,7 @@ export class SseHub {
           await this.refresh(connection);
           if (!connection.closed) scheduleRefresh();
         },
-        REFRESH_MS + Math.floor(Math.random() * 5_000),
+        this.refreshMs + Math.floor(Math.random() * (this.refreshMs / 4)),
       );
     };
     scheduleRefresh();
@@ -269,7 +280,7 @@ export class SseHub {
       client.on('end', () => this.reconnectListener(generation));
       this.listenerPing = setInterval(() => {
         void client.query('SELECT 1').catch(() => this.reconnectListener(generation));
-      }, KEEPALIVE_MS);
+      }, this.keepaliveMs);
       this.listenerPing.unref();
       this.resyncAll('listen_connected');
     } catch {
@@ -504,7 +515,7 @@ export class SseHub {
 
   private sendRaw(connection: Connection, frame: string): void {
     if (connection.closed) return;
-    if (connection.raw.writableLength > MAX_BUFFER_BYTES) {
+    if (connection.raw.writableLength > this.maxBufferBytes) {
       this.metrics.backpressureCloses += 1;
       this.closeConnection(connection, 'backpressure');
       return;
@@ -564,6 +575,12 @@ export class SseHub {
       });
       if ('reason' in checked) {
         this.closeConnection(connection, checked.reason ?? 'membership_removed');
+        return;
+      }
+      const rank = (role: string) =>
+        role === 'tenant_admin' ? 0 : role === 'site_manager' ? 1 : 2;
+      if (rank(checked.membership.role) > rank(connection.scope.role)) {
+        this.closeConnection(connection, 'role_demoted');
         return;
       }
       if (
