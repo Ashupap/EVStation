@@ -141,6 +141,7 @@ describe('SSE tenant isolation', () => {
         site_id: SEED_IDS.betaSite1,
         station_id: STATION_ID,
         session_id: null,
+        connector_id: CONNECTOR_ID,
         occurred_at: '2026-11-12T10:00:00Z',
       };
       const pending = reader
@@ -169,4 +170,67 @@ describe('SSE tenant isolation', () => {
       await reader.cancel().catch(() => undefined);
     }
   }, 15_000);
+});
+
+describe('SSE LISTEN reconnect', () => {
+  it('remains single-listener after two backend terminations and delivers once', async () => {
+    const pid = async () =>
+      (
+        await db.superuser.query<{ pid: number }>(
+          "SELECT pid FROM pg_stat_activity WHERE application_name='evstation_sse_listener' LIMIT 1",
+        )
+      ).rows[0]?.pid;
+    const waitForNewPid = async (old: number) => {
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline) {
+        const next = await pid();
+        if (next && next !== old) return next;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error('LISTEN did not reconnect');
+    };
+    const first = await pid();
+    if (!first) throw new Error('LISTEN session missing');
+    await db.superuser.query('SELECT pg_terminate_backend($1)', [first]);
+    const second = await waitForNewPid(first);
+    await db.superuser.query('SELECT pg_terminate_backend($1)', [second]);
+    const third = await waitForNewPid(second);
+    const listeners = await db.superuser.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM pg_stat_activity WHERE application_name='evstation_sse_listener'",
+    );
+    expect(listeners.rows[0]?.n).toBe('1');
+    expect(third).not.toBe(second);
+
+    const controller = new AbortController();
+    const response = await fetch(`${baseUrl}/events`, {
+      headers: { authorization: 'Bearer adminA', 'x-tenant-id': SEED_IDS.acmeTenant },
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    try {
+      await readChunk(reader, 1_000);
+      await db.superuser.query("SELECT pg_notify('evstation_events', $1)", [
+        JSON.stringify({
+          v: 1,
+          id: crypto.randomUUID(),
+          kind: 'station.status',
+          tenant_id: SEED_IDS.acmeTenant,
+          site_id: SEED_IDS.acmeSite1,
+          station_id: STATION_ID,
+          session_id: null,
+          connector_id: CONNECTOR_ID,
+          occurred_at: '2026-11-12T10:00:00Z',
+        }),
+      ]);
+      let text = '';
+      const deadline = Date.now() + 5_000;
+      while (!text.includes('event: station.status') && Date.now() < deadline) {
+        text += (await readChunk(reader, 1_000)) ?? '';
+      }
+      expect(text.match(/event: station\.status/g) ?? []).toHaveLength(1);
+    } finally {
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+    }
+  }, 25_000);
 });

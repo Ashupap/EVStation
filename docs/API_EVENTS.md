@@ -30,7 +30,7 @@ Control events:
 
 - `event: resync` — after LISTEN reconnect or `Last-Event-ID`; refetch.
 - `event: closed` — final event with `data.reason`:
-  `membership_removed`, `role_demoted`, `tenant_suspended`, `site_scope_lost`,
+  `membership_removed`, `tenant_suspended`, `site_scope_lost`,
   `token_expired`, `server_shutdown`, `backpressure`, `client_closed`.
 
 ## Event kinds and data

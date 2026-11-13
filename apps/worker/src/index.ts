@@ -6,7 +6,11 @@ import { handleEvent, handleFailure } from './ingest.js';
 import { runJobs } from './jobs.js';
 
 const config = loadWorkerConfig();
-const ingestPool = new pg.Pool({ connectionString: config.ingestDatabaseUrl, max: 10 });
+const ingestPool = new pg.Pool({
+  connectionString: config.ingestDatabaseUrl,
+  max: 10,
+  options: `-c evstation.meter_notify_interval_s=${config.meterNotifyIntervalS}`,
+});
 const jobsPool = new pg.Pool({ connectionString: config.jobsDatabaseUrl, max: 2 });
 
 let lastEventAt: string | null = null;

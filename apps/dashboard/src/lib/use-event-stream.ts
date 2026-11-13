@@ -2,12 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const TERMINAL_REASONS = new Set([
-  'membership_removed',
-  'role_demoted',
-  'tenant_suspended',
-  'site_scope_lost',
-]);
+const TERMINAL_REASONS = new Set(['membership_removed', 'tenant_suspended', 'site_scope_lost']);
 
 export interface StreamEvent {
   version: number;

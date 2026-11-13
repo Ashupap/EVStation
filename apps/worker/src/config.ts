@@ -45,6 +45,7 @@ export interface WorkerConfig {
   rabbitmqUser: string;
   rabbitmqPassword: string;
   queueDepthAlertThreshold: number;
+  meterNotifyIntervalS: number;
 }
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
@@ -90,5 +91,6 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     rabbitmqPassword:
       merged.RABBITMQ_MONITOR_PASS ?? merged.OUR_AMQP_MONITOR_PASSWORD ?? 'unavailable',
     queueDepthAlertThreshold: number('QUEUE_DEPTH_ALERT_THRESHOLD', 10000),
+    meterNotifyIntervalS: number('METER_NOTIFY_INTERVAL_S', 5),
   };
 }

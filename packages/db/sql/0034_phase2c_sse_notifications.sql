@@ -1,11 +1,9 @@
 -- 0034_phase2c_sse_notifications.sql — additive phase 2c NOTIFY emission.
 -- Existing functions remain SECURITY DEFINER and keep their 0032 owner.
-ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS last_meter_notify_at timestamptz;
-GRANT UPDATE (last_meter_notify_at) ON app.sessions TO evstation_ingest_definer;
-
 CREATE OR REPLACE FUNCTION app.notify_event(
   p_kind text, p_tenant_id uuid, p_site_id uuid, p_station_id uuid,
-  p_session_id uuid, p_occurred_at timestamptz, p_event_id uuid DEFAULT gen_random_uuid()
+  p_session_id uuid, p_occurred_at timestamptz,
+  p_connector_id uuid DEFAULT NULL, p_event_id uuid DEFAULT gen_random_uuid()
 ) RETURNS void
 LANGUAGE sql
 SET search_path = pg_catalog, app, pg_temp
@@ -14,12 +12,12 @@ AS $fn$
     'v', 1, 'id', p_event_id, 'kind', p_kind,
     'tenant_id', p_tenant_id, 'site_id', p_site_id,
     'station_id', p_station_id, 'session_id', p_session_id,
-    'occurred_at', p_occurred_at
+    'connector_id', p_connector_id, 'occurred_at', p_occurred_at
   )::text)
 $fn$;
-ALTER FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid)
+ALTER FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid,uuid)
   OWNER TO evstation_ingest_definer;
-REVOKE ALL ON FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid,uuid) FROM PUBLIC;
 
 ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS last_meter_notify_at timestamptz;
 GRANT UPDATE (last_meter_notify_at) ON app.sessions TO evstation_ingest_definer;
@@ -86,7 +84,8 @@ BEGIN
       left(p_error_code, 64), p_event_ref, p_csms_timestamp, p_charger_timestamp)
     ON CONFLICT (station_id, csms_event_ref, csms_timestamp) DO NOTHING;
     IF FOUND THEN
-      PERFORM app.notify_event('station.status', s.tenant_id, s.site_id, s.id, NULL, p_csms_timestamp);
+      PERFORM app.notify_event('station.status', s.tenant_id, s.site_id, s.id, NULL,
+        p_csms_timestamp, NULL);
     END IF;
     RETURN 'accepted';
   END IF;
@@ -107,7 +106,8 @@ BEGIN
     left(p_error_code, 64), p_event_ref, p_csms_timestamp, p_charger_timestamp)
   ON CONFLICT (station_id, csms_event_ref, csms_timestamp) DO NOTHING;
   IF FOUND THEN
-    PERFORM app.notify_event('station.status', s.tenant_id, s.site_id, s.id, NULL, p_csms_timestamp);
+    PERFORM app.notify_event('station.status', s.tenant_id, s.site_id, s.id, NULL,
+      p_csms_timestamp, c.id);
   END IF;
   RETURN 'accepted';
 END
@@ -217,7 +217,7 @@ BEGIN
     SET energy_wh = greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)),
         last_meter_notify_at = CASE
           WHEN (last_meter_notify_at IS NULL OR
-                last_meter_notify_at <= p_csms_timestamp - make_interval(secs => 5))
+                last_meter_notify_at <= p_csms_timestamp - make_interval(secs => coalesce(nullif(current_setting('evstation.meter_notify_interval_s', true), '')::int, 5)))
            AND greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)) IS DISTINCT FROM energy_wh
           THEN p_csms_timestamp ELSE last_meter_notify_at END,
         updated_at = now()
@@ -289,12 +289,8 @@ BEGIN
     FROM deleted d JOIN app.stations st ON st.id = d.station_id
     ON CONFLICT (station_ref, csms_event_ref, csms_timestamp, outcome) DO NOTHING
     RETURNING 1
-  ), notified AS (
-    SELECT app.notify_event('session.updated', d.tenant_id, d.site_id, d.station_id,
-      NULL, d.csms_timestamp)
-    FROM deleted d
   )
-  SELECT count(*) INTO n FROM notified;
+  SELECT count(*) INTO n FROM deleted;
   RETURN n;
 END $fn$;
 

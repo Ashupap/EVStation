@@ -132,6 +132,37 @@ describe('Phase 2c NOTIFY emission', () => {
     expect(await waitNotifications()).toHaveLength(1);
   });
 
+  test('status NOTIFY carries connector id so same-timestamp statuses cannot collide', async () => {
+    const connector2 = await db.superuser.query<{ id: string }>(
+      `INSERT INTO app.connectors (tenant_id, site_id, station_id, connector_number)
+       VALUES ($1, $2, $3, 2) RETURNING id`,
+      [SEED_IDS.acmeTenant, SEED_IDS.acmeSite1, stationId],
+    );
+    await call(ingest, 'ingest_status', [
+      STATION_REF,
+      1,
+      'Available',
+      'NoError',
+      '2026-11-12T10:00:05Z',
+      'status-connector-1',
+      '2026-11-12T10:00:05Z',
+      HASH,
+    ]);
+    await call(ingest, 'ingest_status', [
+      STATION_REF,
+      2,
+      'Faulted',
+      'NoError',
+      '2026-11-12T10:00:05Z',
+      'status-connector-2',
+      '2026-11-12T10:00:05Z',
+      HASH,
+    ]);
+    const payloads = (await waitNotifications()).map((item) => JSON.parse(item));
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1].connector_id).toBe(connector2.rows[0]!.id);
+  });
+
   test('meter notification is throttled and no-op energy does not notify', async () => {
     await call(ingest, 'ingest_transaction_start', [
       STATION_REF,
@@ -227,9 +258,7 @@ describe('Phase 2c NOTIFY emission', () => {
       "UPDATE app.pending_transaction_starts SET expires_at=now()-interval '1 minute'",
     );
     await jobs.query('SELECT app.expire_pending_starts(100)');
-    expect((await waitNotifications()).map((item) => JSON.parse(item).kind)).toEqual([
-      'session.updated',
-    ]);
+    expect(await waitNotifications()).toEqual([]);
   });
 
   test('NOTIFY helper and job functions keep the 0032 owner pattern', async () => {

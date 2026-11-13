@@ -506,3 +506,11 @@ wording above. Implementation follows these amendments exactly.
 5. No replay; `Last-Event-ID` triggers `resync`.
 6. Buffering owned by platform/infra; app headers + RUNBOOK nginx config +
    deploy smoke <2 s first chunk.
+
+### Round-2 implementation notes (binding)
+
+- Status NOTIFY includes `connector_id`; status re-read matches connector/timestamp.
+- Re-read prefers a `tenant_admin` connection, then site_manager/viewer; a stale actor is skipped within a bounded distinct-actor fallback.
+- `expire_pending_starts` no longer emits SSE; it remains ledger-only `START_RESPONSE_MISSING` because a NULL session id is intentionally dropped by reread.
+- Meter notify interval is read from `evstation.meter_notify_interval_s`; the worker sets it from `METER_NOTIFY_INTERVAL_S` (default 5).
+- LISTEN reconnect is single-flight with a generation token, per-client ping, and handler removal.

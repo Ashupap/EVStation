@@ -34,19 +34,30 @@ export async function GET(request: NextRequest) {
   const abort = () => controller.abort();
   request.signal.addEventListener('abort', abort);
 
-  const upstream = await fetch(new URL('/events', `${config.apiBaseUrl}/`), {
-    method: 'GET',
-    signal: controller.signal,
-    cache: 'no-store',
-    headers: {
-      authorization: `Bearer ${session.session.accessToken}`,
-      accept: 'text/event-stream',
-      ...(session.session.tenantId ? { 'x-tenant-id': session.session.tenantId } : {}),
-      ...(request.headers.get('last-event-id')
-        ? { 'last-event-id': request.headers.get('last-event-id') as string }
-        : {}),
-    },
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(new URL('/events', `${config.apiBaseUrl}/`), {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        authorization: `Bearer ${session.session.accessToken}`,
+        accept: 'text/event-stream',
+        ...(session.session.tenantId ? { 'x-tenant-id': session.session.tenantId } : {}),
+        ...(request.headers.get('last-event-id')
+          ? { 'last-event-id': request.headers.get('last-event-id') as string }
+          : {}),
+      },
+    });
+  } catch {
+    request.signal.removeEventListener('abort', abort);
+    return new Response(
+      JSON.stringify({
+        error: { code: 'EVENTS_UNAVAILABLE', message: 'event stream unavailable' },
+      }),
+      { status: 502, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } },
+    );
+  }
   if (!upstream.ok || !upstream.body) {
     request.signal.removeEventListener('abort', abort);
     return new Response(upstream.body, {

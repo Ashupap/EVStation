@@ -35,6 +35,7 @@ interface NotifyPayload {
   site_id?: string;
   station_id?: string;
   session_id?: string | null;
+  connector_id?: string | null;
   occurred_at?: string;
 }
 
@@ -45,6 +46,45 @@ const REFRESH_MS = 30_000;
 const MAX_PER_USER = Number(process.env.SSE_MAX_PER_USER ?? '10');
 const MAX_PER_TENANT = Number(process.env.SSE_MAX_PER_TENANT ?? '250');
 const MAX_PER_PROCESS = Number(process.env.SSE_MAX_PROCESS ?? '2000');
+
+export class OrderedReReadQueue<T> {
+  private readonly queue: T[] = [];
+  private active = 0;
+  private readonly chains = new Map<string, Promise<void>>();
+
+  constructor(
+    private readonly process: (item: T) => Promise<void>,
+    private readonly key: (item: T) => string,
+    private readonly concurrency = 4,
+    private readonly maxQueue = 1000,
+    private readonly onDrop: () => void = () => undefined,
+  ) {}
+
+  push(item: T): void {
+    if (this.queue.length >= this.maxQueue) {
+      this.onDrop();
+      return;
+    }
+    this.queue.push(item);
+    this.drain();
+  }
+
+  private drain(): void {
+    while (this.active < this.concurrency && this.queue.length > 0) {
+      const item = this.queue.shift()!;
+      const key = this.key(item);
+      const previous = this.chains.get(key) ?? Promise.resolve();
+      this.active += 1;
+      const task = previous.catch(() => undefined).then(() => this.process(item));
+      this.chains.set(key, task);
+      void task.finally(() => {
+        this.active -= 1;
+        if (this.chains.get(key) === task) this.chains.delete(key);
+        this.drain();
+      });
+    }
+  }
+}
 
 export interface SseMetrics {
   connections: number;
@@ -61,6 +101,9 @@ export class SseHub {
   private listener: pg.Client | null = null;
   private listenerStopping = false;
   private listenerRetry = 1_000;
+  private listenerGeneration = 0;
+  private listenerPing: NodeJS.Timeout | null = null;
+  private listenerReconnectTimer: NodeJS.Timeout | null = null;
   private readonly metrics: SseMetrics = {
     connections: 0,
     notified: 0,
@@ -70,21 +113,40 @@ export class SseHub {
     backpressureCloses: 0,
     rereadMs: [],
   };
+  private readonly pipeline: OrderedReReadQueue<NotifyPayload>;
 
   constructor(
     private readonly db: ApiDb,
     private readonly config: ApiConfig,
-  ) {}
+  ) {
+    this.pipeline = new OrderedReReadQueue(
+      (payload) => this.processNotification(payload),
+      (payload) => payload.session_id ?? payload.station_id ?? 'unknown',
+      4,
+      1000,
+      () => {
+        this.metrics.droppedQueueFull += 1;
+      },
+    );
+  }
 
   async start(): Promise<void> {
-    await this.connectListener();
+    await this.connectListener(this.listenerGeneration);
   }
 
   async close(): Promise<void> {
     this.listenerStopping = true;
+    this.listenerGeneration += 1;
+    if (this.listenerPing) clearInterval(this.listenerPing);
+    if (this.listenerReconnectTimer) clearTimeout(this.listenerReconnectTimer);
+    this.listenerPing = null;
+    this.listenerReconnectTimer = null;
     for (const connection of this.connections.values())
       this.closeConnection(connection, 'server_shutdown');
-    await this.listener?.end().catch(() => undefined);
+    const old = this.listener;
+    this.listener = null;
+    old?.removeAllListeners();
+    await old?.end().catch(() => undefined);
   }
 
   snapshot() {
@@ -132,6 +194,7 @@ export class SseHub {
     };
     this.connections.set(id, connection);
     try {
+      reply.raw.socket?.setTimeout(0);
       reply.raw.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache, no-transform',
@@ -141,15 +204,32 @@ export class SseHub {
       });
       reply.raw.write(': connected\n\n');
     } catch (error) {
+      this.connections.delete(id);
+      reply.raw.destroy();
       throw error;
     }
     if (request.headers['last-event-id'])
       this.send(connection, 'resync', { reason: 'last-event-id' });
-    connection.keepalive = setInterval(
-      () => this.sendRaw(connection, ': keepalive\n\n'),
-      KEEPALIVE_MS,
-    );
-    connection.refresh = setInterval(() => void this.refresh(connection), REFRESH_MS);
+    const keepalive = () => {
+      if (connection.closed) return;
+      this.sendRaw(connection, ': keepalive\n\n');
+      connection.keepalive = setTimeout(
+        keepalive,
+        KEEPALIVE_MS + Math.floor(Math.random() * 2_000),
+      );
+    };
+    connection.keepalive = setTimeout(keepalive, KEEPALIVE_MS + Math.floor(Math.random() * 2_000));
+    const scheduleRefresh = () => {
+      if (connection.closed) return;
+      connection.refresh = setTimeout(
+        async () => {
+          await this.refresh(connection);
+          if (!connection.closed) scheduleRefresh();
+        },
+        REFRESH_MS + Math.floor(Math.random() * 5_000),
+      );
+    };
+    scheduleRefresh();
     if (scope.tokenExpiresAt) {
       connection.expiry = setTimeout(
         () => this.closeConnection(connection, 'token_expired'),
@@ -160,37 +240,65 @@ export class SseHub {
     reply.raw.on('error', () => this.closeConnection(connection, 'client_error'));
   }
 
-  private async connectListener(): Promise<void> {
-    if (this.listenerStopping) return;
-    const client = new pg.Client({ connectionString: this.config.databaseUrlApp });
+  private async connectListener(generation: number): Promise<void> {
+    if (this.listenerStopping || generation !== this.listenerGeneration) return;
+    const client = new pg.Client({
+      connectionString: this.config.databaseUrlApp,
+      application_name: 'evstation_sse_listener',
+    });
     try {
       await client.connect();
       await client.query(`LISTEN ${CHANNEL}`);
+      if (this.listenerStopping || generation !== this.listenerGeneration) {
+        client.removeAllListeners();
+        await client.end().catch(() => undefined);
+        return;
+      }
+      const old = this.listener;
       this.listener = client;
+      if (old && old !== client) {
+        if (this.listenerPing) clearInterval(this.listenerPing);
+        old.removeAllListeners();
+        await old.end().catch(() => undefined);
+      }
       this.listenerRetry = 1_000;
       client.on('notification', (message) => {
-        if (message.payload) void this.handleNotification(message.payload);
+        if (message.payload) this.handleNotification(message.payload);
       });
-      client.on('error', () => this.reconnectListener());
-      client.on('end', () => this.reconnectListener());
-      setInterval(() => {
-        void client.query('SELECT 1').catch(() => this.reconnectListener());
-      }, KEEPALIVE_MS).unref();
+      client.on('error', () => this.reconnectListener(generation));
+      client.on('end', () => this.reconnectListener(generation));
+      this.listenerPing = setInterval(() => {
+        void client.query('SELECT 1').catch(() => this.reconnectListener(generation));
+      }, KEEPALIVE_MS);
+      this.listenerPing.unref();
       this.resyncAll('listen_connected');
     } catch {
+      client.removeAllListeners();
       await client.end().catch(() => undefined);
-      this.reconnectListener();
+      this.reconnectListener(generation);
     }
   }
 
-  private reconnectListener(): void {
-    if (this.listenerStopping) return;
+  private reconnectListener(generation: number): void {
+    if (this.listenerStopping || generation !== this.listenerGeneration) return;
+    if (this.listenerReconnectTimer) return;
+    this.listenerGeneration += 1;
+    const nextGeneration = this.listenerGeneration;
+    if (this.listenerPing) clearInterval(this.listenerPing);
+    this.listenerPing = null;
     const old = this.listener;
     this.listener = null;
+    old?.removeAllListeners();
     void old?.end().catch(() => undefined);
     const delay = this.listenerRetry;
     this.listenerRetry = Math.min(this.listenerRetry * 2, 30_000);
-    setTimeout(() => void this.connectListener(), delay + Math.floor(Math.random() * 250));
+    this.listenerReconnectTimer = setTimeout(
+      () => {
+        this.listenerReconnectTimer = null;
+        void this.connectListener(nextGeneration);
+      },
+      delay + Math.floor(Math.random() * 250),
+    );
   }
 
   private resyncAll(reason: string): void {
@@ -198,7 +306,7 @@ export class SseHub {
     for (const connection of this.connections.values()) this.send(connection, 'resync', { reason });
   }
 
-  private async handleNotification(raw: string): Promise<void> {
+  private handleNotification(raw: string): void {
     let payload: NotifyPayload;
     try {
       payload = JSON.parse(raw) as NotifyPayload;
@@ -214,17 +322,34 @@ export class SseHub {
     ) {
       return;
     }
-    const candidates = [...this.connections.values()].filter(
-      (connection) =>
-        connection.scope.tenantId === payload.tenant_id &&
-        (connection.scope.role === 'tenant_admin' ||
-          connection.scope.siteIds.includes(payload.site_id!)),
-    );
+    this.pipeline.push(payload);
+  }
+
+  private async processNotification(payload: NotifyPayload): Promise<void> {
+    const candidates = [...this.connections.values()]
+      .filter(
+        (connection) =>
+          connection.scope.tenantId === payload.tenant_id &&
+          (connection.scope.role === 'tenant_admin' ||
+            connection.scope.siteIds.includes(payload.site_id!)),
+      )
+      .sort((a, b) => {
+        const rank = (role: string) =>
+          role === 'tenant_admin' ? 0 : role === 'site_manager' ? 1 : 2;
+        return rank(a.scope.role) - rank(b.scope.role);
+      });
     if (candidates.length === 0) return;
-    const started = performance.now();
-    const row = await this.reread(candidates[0].scope.actorId, payload);
-    this.metrics.rereadMs.push(performance.now() - started);
-    if (this.metrics.rereadMs.length > 1000) this.metrics.rereadMs.shift();
+    let row: Awaited<ReturnType<SseHub['reread']>> = null;
+    const tried = new Set<string>();
+    for (const candidate of candidates) {
+      if (tried.has(candidate.scope.actorId)) continue;
+      tried.add(candidate.scope.actorId);
+      const started = performance.now();
+      row = await this.reread(candidate.scope.actorId, payload);
+      this.metrics.rereadMs.push(performance.now() - started);
+      if (this.metrics.rereadMs.length > 1000) this.metrics.rereadMs.shift();
+      if (row) break;
+    }
     if (!row) {
       this.metrics.droppedNotVisible += 1;
       return;
@@ -240,7 +365,7 @@ export class SseHub {
       }
       this.send(
         connection,
-        payload.kind,
+        payload.kind!,
         { tenant_id: row.tenant_id, site_id: row.site_id, ...row.data },
         payload.id,
       );
@@ -302,8 +427,14 @@ export class SseHub {
            FROM app.station_status_events e
            LEFT JOIN app.connectors c ON c.id = e.connector_id
            WHERE e.station_id = $1 AND e.tenant_id = $2 AND e.csms_timestamp = $3
+             AND e.connector_id IS NOT DISTINCT FROM $4::uuid
            ORDER BY e.id DESC LIMIT 1`,
-          [payload.station_id, payload.tenant_id, payload.occurred_at],
+          [
+            payload.station_id,
+            payload.tenant_id,
+            payload.occurred_at,
+            payload.connector_id ?? null,
+          ],
         );
         const row = rows[0];
         return row
@@ -390,13 +521,21 @@ export class SseHub {
     if (connection.closed) return;
     connection.closed = true;
     this.connections.delete(connection.id);
-    if (connection.keepalive) clearInterval(connection.keepalive);
-    if (connection.refresh) clearInterval(connection.refresh);
+    if (connection.keepalive) clearTimeout(connection.keepalive);
+    if (connection.refresh) clearTimeout(connection.refresh);
     if (connection.expiry) clearTimeout(connection.expiry);
     if (reason !== 'client_closed' && reason !== 'client_error') {
-      connection.response.raw.write(`event: closed\ndata: ${JSON.stringify({ reason })}\n\n`);
+      try {
+        connection.response.raw.write(`event: closed\ndata: ${JSON.stringify({ reason })}\n\n`);
+      } catch {
+        /* socket already gone */
+      }
     }
-    connection.response.raw.end();
+    if (reason === 'backpressure') {
+      connection.response.raw.destroy();
+    } else {
+      connection.response.raw.end();
+    }
   }
 
   private async refresh(connection: Connection): Promise<void> {
@@ -419,9 +558,6 @@ export class SseHub {
         );
         if (!membership) return { reason: 'membership_removed' as const };
         if (membership.tenantStatus === 'suspended') return { reason: 'tenant_suspended' as const };
-        if (!['tenant_admin', 'site_manager', 'viewer'].includes(membership.role)) {
-          return { reason: 'role_demoted' as const };
-        }
         const siteIds =
           membership.role === 'tenant_admin' ? [] : await loadSiteScope(client, principal);
         return { membership, siteIds };
@@ -440,7 +576,7 @@ export class SseHub {
       connection.scope.role = checked.membership.role;
       connection.scope.siteIds = checked.siteIds;
     } catch {
-      this.closeConnection(connection, 'scope_refresh_failed');
+      // Temporary DB failure: keep the stream and retry on the next jittered refresh.
     }
   }
 }

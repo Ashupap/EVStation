@@ -761,6 +761,7 @@ describe('HTTP role x route matrix', () => {
         [keyof typeof MATRIX_ACTORS, string]
       >) {
         const body = matrixBody(key, actor);
+        if (route.streaming && allowed.includes(actor)) continue;
         const response = await app.inject({
           method: route.method,
           url: matrixUrl(key),
@@ -769,7 +770,6 @@ describe('HTTP role x route matrix', () => {
         });
         const label = `${key} as ${actor}`;
         if (allowed.includes(actor)) {
-          if (route.streaming) continue;
           expect(response.statusCode, label).not.toBe(401);
           expect(response.statusCode, label).not.toBe(403);
           expect(response.statusCode, label).toBeLessThan(500);
