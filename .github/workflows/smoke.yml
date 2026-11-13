@@ -38,6 +38,8 @@ jobs:
           . infra/compose/.env
           set +a
           HASURA_LIVE_TEST=1 pnpm vitest run packages/csms-adapter/test/hasura-role.test.ts packages/csms-adapter/test/hasura-live.test.ts
+      - name: AMQP retry dead-letter integration
+        run: AMQP_LIVE_TEST=1 pnpm vitest run packages/csms-adapter/test/amqp-retry.live.test.ts
       - name: Prepare Phase 1 database
         run: pnpm db:migrate && pnpm db:seed
       - name: Phase 2b E2E (API registration + 8082 Basic auth + replay + cross-tenant)

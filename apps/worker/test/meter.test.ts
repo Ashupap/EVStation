@@ -18,7 +18,7 @@ describe('meter normalization', () => {
       '2026-11-12T11:00:00Z',
     );
     expect(values).toEqual([
-      { recorded_at: '2026-11-12T10:00:00Z', energy_wh: 1500, power_w: 7000 },
+      { recorded_at: '2026-11-12T10:00:00.000Z', energy_wh: 1500, power_w: 7000 },
     ]);
   });
 
@@ -35,9 +35,30 @@ describe('meter normalization', () => {
     );
     expect(values).toEqual([
       { recorded_at: '2026-11-12T11:00:00Z', energy_wh: null, power_w: null },
-      { recorded_at: '2026-11-12T10:00:01Z', energy_wh: null, power_w: null },
+      { recorded_at: '2026-11-12T10:00:01.000Z', energy_wh: null, power_w: null },
     ]);
     expect(normalizeMeterValues({ meterValue }, '2026-11-12T11:00:00Z')).toHaveLength(200);
+  });
+
+  it('skips unknown units, sums phase power and falls back invalid timestamps', () => {
+    const values = normalizeMeterValues(
+      {
+        meterValue: [
+          {
+            timestamp: 'not-a-date',
+            sampledValue: [
+              { value: '1', unit: 'MWh', measurand: 'Energy.Active.Import.Register' },
+              { value: '2', unit: 'kW', measurand: 'Power.Active.Import', phase: 'L1' },
+              { value: '3', unit: 'kW', measurand: 'Power.Active.Import', phase: 'L2' },
+            ],
+          },
+        ],
+      },
+      '2026-11-12T11:00:00Z',
+    );
+    expect(values).toEqual([
+      { recorded_at: '2026-11-12T11:00:00Z', energy_wh: null, power_w: 5000 },
+    ]);
   });
 
   it('rejects a missing meterValue array', () => {

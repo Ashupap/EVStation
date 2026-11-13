@@ -635,6 +635,23 @@ export const ROUTES: RouteDefinition[] = [
   },
   {
     method: 'GET',
+    url: '/ingestion-rejections',
+    tenantSource: 'none',
+    capability: 'ingestion.read',
+    schema: { tags: ['ingestion'], querystring: EventQuery },
+    async handler({ client, request }) {
+      const query = EventQuery.parse(request.query);
+      const { rows } = await client.query(
+        `SELECT station_ref, reason_code, day, occurrence_count, first_seen_at, last_seen_at
+         FROM app.ingestion_rejections
+         ORDER BY day DESC, station_ref, reason_code LIMIT $1`,
+        [query.limit],
+      );
+      return { ingestion_rejections: rows };
+    },
+  },
+  {
+    method: 'GET',
     url: '/sessions',
     tenantSource: 'header',
     capability: 'session.read',
@@ -774,167 +791,193 @@ export const ROUTES: RouteDefinition[] = [
       if (!location.csms_location_id && body.latitude === undefined) {
         throw new AppError(400, 'LOCATION_REQUIRED', 'coordinates or a CSMS location are required');
       }
-      const inserted = await client.query<{ id: string }>(
-        `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref, vendor, model, serial,
+      const registrationLock = await db.pool.connect();
+      try {
+        if (!(await tryStationLock(registrationLock, body.station_ref))) {
+          void reply.code(409);
+          return {
+            error: {
+              code: 'REGISTRATION_IN_PROGRESS',
+              message: 'station registration is already in progress',
+            },
+          };
+        }
+        const inserted = await client.query<{ id: string }>(
+          `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref, vendor, model, serial,
            firmware_version, ocpp_version)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ocpp1.6') RETURNING id`,
-        [
-          tenantId,
-          body.site_id,
-          location.org_code,
-          body.station_ref,
-          body.vendor ?? null,
-          body.model ?? null,
-          body.serial ?? null,
-          body.firmware_version ?? null,
-        ],
-      );
-      const stationId = inserted.rows[0]!.id;
-      await client.query('COMMIT');
-      const registrationInput = {
-        stationId,
-        tenantId,
-        siteId: body.site_id,
-        stationRef: body.station_ref,
-        orgCode: location.org_code,
-        siteCode: location.site_code,
-        csmsLocationId: location.csms_location_id,
-        latitude: body.latitude,
-        longitude: body.longitude,
-        vendor: body.vendor,
-        model: body.model,
-        serial: body.serial,
-        firmwareVersion: body.firmware_version,
-        ocppVersion: 'ocpp1.6' as const,
-        connectors: body.connectors?.map((item) => ({
-          connectorNumber: item.connector_number,
-          type: item.type,
-          maxPowerW: item.max_power_w,
-        })),
-      };
-
-      let result;
-      try {
-        result = await adapter.registerStation(registrationInput);
-      } catch (error) {
-        const code = error instanceof CsmsError ? error.code : 'CSMS_REGISTRATION_FAILED';
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          await tx.query('SELECT app.mark_station_registration_failed($1, $2)', [stationId, code]);
-          await writeAudit(tx, principal, {
+          [
             tenantId,
-            action: 'station.registration_failed',
-            resourceType: 'station',
-            resourceId: stationId,
-            requestId: request.id,
-            details: { code },
-          });
-        });
-        void reply.code(code === 'CSMS_CONFLICT' ? 409 : 502);
-        return {
-          error: { code, message: 'station registration failed' },
-          station: {
-            id: stationId,
-            station_ref: body.station_ref,
-            registration_status: 'registration_failed',
-          },
+            body.site_id,
+            location.org_code,
+            body.station_ref,
+            body.vendor ?? null,
+            body.model ?? null,
+            body.serial ?? null,
+            body.firmware_version ?? null,
+          ],
+        );
+        const stationId = inserted.rows[0]!.id;
+        await client.query('COMMIT');
+        const registrationInput = {
+          stationId,
+          tenantId,
+          siteId: body.site_id,
+          stationRef: body.station_ref,
+          orgCode: location.org_code,
+          siteCode: location.site_code,
+          csmsLocationId: location.csms_location_id,
+          latitude: body.latitude,
+          longitude: body.longitude,
+          vendor: body.vendor,
+          model: body.model,
+          serial: body.serial,
+          firmwareVersion: body.firmware_version,
+          ocppVersion: 'ocpp1.6' as const,
+          connectors: body.connectors?.map((item) => ({
+            connectorNumber: item.connector_number,
+            type: item.type,
+            maxPowerW: item.max_power_w,
+          })),
         };
-      }
 
-      try {
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          if (result.csmsLocationId) {
-            await tx.query('SELECT app.set_site_csms_location($1, $2)', [
-              body.site_id,
-              result.csmsLocationId,
+        let result;
+        try {
+          result = await adapter.registerStation(registrationInput);
+        } catch (error) {
+          const code = error instanceof CsmsError ? error.code : 'CSMS_REGISTRATION_FAILED';
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            await tx.query('SELECT app.mark_station_registration_failed($1, $2)', [
+              stationId,
+              code,
             ]);
-          }
-          await tx.query('SELECT app.mark_station_registered($1, $2)', [
-            stationId,
-            result.csmsStationId,
-          ]);
-          const connectors = body.connectors?.length ? body.connectors : [{ connector_number: 1 }];
-          for (const connector of connectors) {
-            await tx.query(
-              `INSERT INTO app.connectors
+            await writeAudit(tx, principal, {
+              tenantId,
+              action: 'station.registration_failed',
+              resourceType: 'station',
+              resourceId: stationId,
+              requestId: request.id,
+              details: { code },
+            });
+          });
+          void reply.code(code === 'CSMS_CONFLICT' ? 409 : 502);
+          return {
+            error: { code, message: 'station registration failed' },
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'registration_failed',
+            },
+          };
+        }
+
+        try {
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            if (result.csmsLocationId) {
+              await tx.query('SELECT app.set_site_csms_location($1, $2)', [
+                body.site_id,
+                result.csmsLocationId,
+              ]);
+            }
+            await tx.query('SELECT app.mark_station_registered($1, $2)', [
+              stationId,
+              result.csmsStationId,
+            ]);
+            const connectors = body.connectors?.length
+              ? body.connectors
+              : [{ connector_number: 1 }];
+            for (const connector of connectors) {
+              await tx.query(
+                `INSERT INTO app.connectors
                  (tenant_id, site_id, station_id, connector_number, type, max_power_w)
                VALUES ($1, $2, $3, $4, $5, $6)
                ON CONFLICT (station_id, connector_number) DO NOTHING`,
-              [
-                tenantId,
-                body.site_id,
-                stationId,
-                connector.connector_number,
-                connector.type ?? null,
-                connector.max_power_w ?? null,
-              ],
-            );
-          }
-          await writeAudit(tx, principal, {
-            tenantId,
-            action: 'station.created',
-            resourceType: 'station',
-            resourceId: stationId,
-            requestId: request.id,
+                [
+                  tenantId,
+                  body.site_id,
+                  stationId,
+                  connector.connector_number,
+                  connector.type ?? null,
+                  connector.max_power_w ?? null,
+                ],
+              );
+            }
+            await writeAudit(tx, principal, {
+              tenantId,
+              action: 'station.created',
+              resourceType: 'station',
+              resourceId: stationId,
+              requestId: request.id,
+            });
           });
-        });
-      } catch {
-        void reply.code(503);
-        return {
-          error: {
-            code: 'REGISTRATION_STATE_RETRY',
-            message: 'registration succeeded but state could not be recorded; retry',
-            retryable: true,
-          },
-          station: { id: stationId, station_ref: body.station_ref, registration_status: 'pending' },
-        };
-      }
+        } catch {
+          void reply.code(503);
+          return {
+            error: {
+              code: 'REGISTRATION_STATE_RETRY',
+              message: 'registration succeeded but state could not be recorded; retry',
+              retryable: true,
+            },
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'pending',
+            },
+          };
+        }
 
-      try {
-        const credentials = await adapter.provisionPassword(body.station_ref);
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          await tx.query('SELECT app.mark_station_credentials_provisioned($1)', [stationId]);
-        });
-        void reply.code(201);
-        void reply.header('cache-control', 'no-store');
-        return {
-          station: {
-            id: stationId,
-            station_ref: body.station_ref,
-            registration_status: 'registered',
-          },
-          credentials: { username: body.station_ref, password: credentials },
-        };
-      } catch (error) {
-        const code = error instanceof CsmsError ? error.code : 'CSMS_CREDENTIAL_FAILED';
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          await tx.query('SELECT app.mark_station_rotation_incomplete($1)', [stationId]);
-          await writeAudit(tx, principal, {
-            tenantId,
-            action: 'station.credentials_rotation_failed',
-            resourceType: 'station',
-            resourceId: stationId,
-            requestId: request.id,
-            details: { code },
+        try {
+          const credentials = await adapter.provisionPassword(body.station_ref);
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            await tx.query('SELECT app.mark_station_credentials_provisioned($1)', [stationId]);
           });
-        });
-        void reply.code(502);
-        return {
-          error: { code, message: 'station registered but credential provisioning is incomplete' },
-          station: {
-            id: stationId,
-            station_ref: body.station_ref,
-            registration_status: 'registered',
-            credentials_state: 'rotation_incomplete',
-          },
-        };
+          void reply.code(201);
+          void reply.header('cache-control', 'no-store');
+          return {
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'registered',
+            },
+            credentials: { username: body.station_ref, password: credentials },
+          };
+        } catch (error) {
+          const code = error instanceof CsmsError ? error.code : 'CSMS_CREDENTIAL_FAILED';
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            await tx.query('SELECT app.mark_station_rotation_incomplete($1)', [stationId]);
+            await writeAudit(tx, principal, {
+              tenantId,
+              action: 'station.credentials_rotation_failed',
+              resourceType: 'station',
+              resourceId: stationId,
+              requestId: request.id,
+              details: { code },
+            });
+          });
+          void reply.code(502);
+          return {
+            error: {
+              code,
+              message: 'station registered but credential provisioning is incomplete',
+            },
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'registered',
+              credentials_state: 'rotation_incomplete',
+            },
+          };
+        }
+      } finally {
+        await releaseStationLock(registrationLock, body.station_ref);
       }
     },
   },
@@ -1211,7 +1254,17 @@ export const ROUTES: RouteDefinition[] = [
         throw new AppError(409, 'STATION_NOT_RETRYABLE', 'station is not in a retryable state');
       }
       await client.query('COMMIT');
+      const registrationLock = await db.pool.connect();
       try {
+        if (!(await tryStationLock(registrationLock, row.station_ref))) {
+          void reply.code(409);
+          return {
+            error: {
+              code: 'REGISTRATION_IN_PROGRESS',
+              message: 'station registration is already in progress',
+            },
+          };
+        }
         const result = await adapter.registerStation({
           stationId: params.id,
           tenantId,
@@ -1283,6 +1336,8 @@ export const ROUTES: RouteDefinition[] = [
         });
         void reply.code(code === 'CSMS_CONFLICT' ? 409 : 502);
         return { error: { code, message: 'station registration retry failed' } };
+      } finally {
+        await releaseStationLock(registrationLock, row.station_ref);
       }
     },
   },

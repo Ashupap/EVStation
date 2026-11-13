@@ -295,8 +295,13 @@ Health is `GET http://127.0.0.1:4100/healthz`.
 
 `pnpm dev:stack` creates the RabbitMQ user, the main/retry queues, the DLX and
 the exact bindings (rerun `node scripts/provision-amqp.mjs` if they are
-missing). A failed handler is nacked to the retry queue with a 30 s TTL; after
-five retries the worker writes a `parked` ingestion ledger row and acks.
+missing). A failed handler is nacked to the retry queue with a 30 s TTL. The retry
+queue dead-letters through the default exchange with routing key
+`evstation.ingest`, never back through `messages` (that would reach
+CitrineOS's own consumers). After five retries the worker writes a `parked`
+ingestion ledger row and acks. The committed production definition template is
+`infra/compose/rabbitmq/evstation-ingest-definitions.json`; the dev stack
+script applies the same definitions idempotently.
 Inspect `evstation.ingest`/`evstation.ingest.retry` in the RabbitMQ management
 UI at `http://127.0.0.1:15672`. The worker also runs expired pending starts,
 offline sweeps, stale-session closure, idTag pseudonymization, monthly

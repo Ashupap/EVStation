@@ -324,6 +324,32 @@ async function publish(message) {
   if (!response.ok) throw new Error(`AMQP publish failed: HTTP ${response.status}`);
 }
 
+async function queueMessages(name) {
+  const enc = encodeURIComponent('/');
+  const response = await fetch(`${AMQP_MGMT}/queues/${enc}/${encodeURIComponent(name)}`, {
+    headers: { authorization: AMQP_AUTH, connection: 'close' },
+  });
+  if (!response.ok) return 0;
+  const body = await response.json();
+  return typeof body.messages === 'number' ? body.messages : 0;
+}
+
+async function waitForQueuesToSettle(deadlineMs = 45_000) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    const [main, retry] = await Promise.all([
+      queueMessages('evstation.ingest'),
+      queueMessages('evstation.ingest.retry'),
+    ]);
+    if (main === 0 && retry === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  fail('retry-settle', 'queues did not settle before timeout');
+}
+
 async function waitUntil(fn, label, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -484,7 +510,7 @@ async function main() {
       ledger: before.ledger.length,
     };
     for (const message of captured) await publish(message);
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await waitForQueuesToSettle();
     const after = await snapshot(tokenA, TENANT_A, a.station.id);
     if (
       after.sessions.length !== aCounts.sessions ||
@@ -532,6 +558,7 @@ async function main() {
         await publish({ routingKey: message.routingKey, payload: JSON.stringify(parsed) });
       }
     }
+    await waitForQueuesToSettle();
     await waitUntil(async () => {
       const snap = await snapshot(tokenB, TENANT_B, b.station.id);
       return snap.session?.status === 'completed';

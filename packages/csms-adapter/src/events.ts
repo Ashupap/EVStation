@@ -4,6 +4,18 @@ import type { CsmsEventDisposition, CsmsEventHandler } from './types.js';
 export interface AmqpEventConfig {
   amqpUrl: string;
   queue: string;
+  onState?: (state: 'connected' | 'closed' | 'error', error?: Error) => void;
+}
+
+export function createSerialDispatcher<T>(handler: (value: T) => Promise<void>) {
+  let chain: Promise<void> = Promise.resolve();
+  const dispatcher = ((value: T): Promise<void> => {
+    const next = chain.then(() => handler(value));
+    chain = next.catch(() => undefined);
+    return next;
+  }) as ((value: T) => Promise<void>) & { chain: Promise<void> };
+  Object.defineProperty(dispatcher, 'chain', { get: () => chain });
+  return dispatcher;
 }
 
 export async function subscribeAmqpEvents(
@@ -12,8 +24,9 @@ export async function subscribeAmqpEvents(
 ): Promise<{ close(): Promise<void> }> {
   const connection = await amqp.connect(config.amqpUrl);
   const channel: Channel = await connection.createChannel();
-  await channel.prefetch(10);
+  await channel.prefetch(1);
   let closed = false;
+  let closing = false;
   const onMessage = async (message: ConsumeMessage | null): Promise<void> => {
     if (!message) return;
     const raw = message.content.toString('utf8');
@@ -58,14 +71,23 @@ export async function subscribeAmqpEvents(
     if (disposition === 'retry') channel.nack(message, false, false);
     else channel.ack(message);
   };
+  const serial = createSerialDispatcher(onMessage);
   const { consumerTag } = await channel.consume(config.queue, (message) => {
-    void onMessage(message);
+    void serial(message);
   });
+  connection.on('error', (error) => config.onState?.('error', error));
+  connection.on('close', () => {
+    if (!closing) config.onState?.('closed');
+  });
+  channel.on('error', (error) => config.onState?.('error', error));
+  config.onState?.('connected');
   return {
     close: async () => {
-      if (closed) return;
-      closed = true;
+      if (closing) return;
+      closing = true;
       await channel.cancel(consumerTag).catch(() => undefined);
+      await serial.chain;
+      closed = true;
       await channel.close().catch(() => undefined);
       await connection.close().catch(() => undefined);
     },

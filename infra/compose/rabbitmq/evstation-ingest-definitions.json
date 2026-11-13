@@ -1,0 +1,119 @@
+{
+  "exchanges": [
+    {
+      "name": "evstation.ingest.dlx",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "evstation.ingest",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "evstation.ingest.dlx",
+        "x-max-length": 100000,
+        "x-overflow": "drop-head"
+      }
+    },
+    {
+      "name": "evstation.ingest.retry",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 30000,
+        "x-dead-letter-exchange": "",
+        "x-dead-letter-routing-key": "evstation.ingest"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "frame.inbound.BootNotification",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "frame.inbound.StatusNotification",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "frame.inbound.Heartbeat",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "frame.inbound.StartTransaction",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "frame.inbound.MeterValues",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "frame.inbound.StopTransaction",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "frame.outbound.StartTransaction",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "connection.connected",
+      "arguments": {}
+    },
+    {
+      "source": "messages",
+      "vhost": "/",
+      "destination": "evstation.ingest",
+      "destination_type": "queue",
+      "routing_key": "connection.closed",
+      "arguments": {}
+    },
+    {
+      "source": "evstation.ingest.dlx",
+      "vhost": "/",
+      "destination": "evstation.ingest.retry",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    }
+  ]
+}

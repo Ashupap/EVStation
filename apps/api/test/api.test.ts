@@ -665,6 +665,7 @@ const MATRIX_ALLOW: Record<string, Array<keyof typeof MATRIX_ACTORS>> = {
   'POST /tenants': ['platform_admin'],
   'PATCH /tenants/:id': ['platform_admin'],
   'GET /sites': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /ingestion-rejections': ['platform_admin'],
   'GET /sessions': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
   'GET /sessions/:id': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
   'GET /stations': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
@@ -1677,16 +1678,36 @@ describe('station registration and credential rotation', () => {
       },
     });
     const stationId = created.json().station.id as string;
-    const rotate = () =>
-      app.inject({
-        method: 'POST',
-        url: `/stations/${stationId}/credentials/rotate`,
-        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
-      });
-    const [a, b] = await Promise.all([rotate(), rotate()]);
-    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
-    const busy = a.statusCode === 409 ? a : b;
-    expect(busy.json().error.code).toBe('ROTATION_IN_PROGRESS');
+    const adapter = createFakeCsmsAdapter();
+    const originalRotate = adapter.rotatePassword.bind(adapter);
+    const delayed = adapter as CsmsAdapter & { rotatePassword: CsmsAdapter['rotatePassword'] };
+    delayed.rotatePassword = async (ref) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return originalRotate(ref);
+    };
+    const rotationApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: delayed,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const rotate = () =>
+        rotationApp.inject({
+          method: 'POST',
+          url: `/stations/${stationId}/credentials/rotate`,
+          headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        });
+      const [a, b] = await Promise.all([rotate(), rotate()]);
+      expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+      const busy = a.statusCode === 409 ? a : b;
+      expect(busy.json().error.code).toBe('ROTATION_IN_PROGRESS');
+    } finally {
+      await rotationApp.close();
+    }
   });
 
   it('retries a pending state-recording failure and rejects decommissioned/provisioned states', async () => {
@@ -1743,6 +1764,46 @@ describe('station registration and credential rotation', () => {
       expect(response.json().error.code).toBe('ROTATION_IN_PROGRESS');
     } finally {
       await db.superuser.query('SELECT pg_advisory_unlock(hashtext($1))', [stationRef]);
+    }
+  });
+
+  it('takes the station lock for concurrent registration retries', async () => {
+    const stationId = '30000000-0000-4000-8000-000000000806';
+    await db.superuser.query(
+      `INSERT INTO app.stations (id, tenant_id, site_id, org_code, station_ref, registration_status)
+       VALUES ($1, $2, $3, 'ACME', 'ACME-BLR-806', 'pending')`,
+      [stationId, IDS.tenantA, IDS.siteA1],
+    );
+    const adapter = createFakeCsmsAdapter();
+    const original = adapter.registerStation.bind(adapter);
+    const failing = adapter as CsmsAdapter & {
+      registerStation: CsmsAdapter['registerStation'];
+    };
+    failing.registerStation = async (input) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return original(input);
+    };
+    const failingApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: failing,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const call = () =>
+        failingApp.inject({
+          method: 'POST',
+          url: `/stations/${stationId}/register/retry`,
+          headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        });
+      const responses = await Promise.all([call(), call()]);
+      const codes = responses.map((response) => response.statusCode).sort();
+      expect(codes).toEqual([200, 409]);
+    } finally {
+      await failingApp.close();
     }
   });
 

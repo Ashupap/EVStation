@@ -6,12 +6,12 @@ Status: implementation + review fixes complete locally; not yet merged.
 
 ## Evidence
 
-- Full test suite: `pnpm test` — 27 files passed, 1 skipped; 241 tests passed, 3 skipped.
+- Full test suite: `pnpm test` — 30 files passed, 2 skipped; 256 tests passed, 4 skipped.
 - Per-workspace counts from `pnpm vitest run <dir>`:
-  - `packages/db/test`: 5 files, 89 passed
-  - `apps/api/test`: 6 files, 75 passed
-  - `apps/worker/test`: 2 files, 5 passed
-  - `packages/csms-adapter/test`: 4 passed + 1 skipped files; 12 passed + 3 skipped tests
+  - `packages/db/test`: 6 files, 98 passed
+  - `apps/api/test`: 6 files, 76 passed
+  - `apps/worker/test`: 3 files, 9 passed
+  - `packages/csms-adapter/test`: 5 passed + 2 skipped files; 13 passed + 4 skipped tests
   - `packages/shared/test`: 1 file, 1 passed
   - `apps/dashboard/test`: 9 files, 59 passed
 - Phase 2b E2E: `docs/evidence/phase2b-e2e.log` — PASS with API registration,
@@ -66,3 +66,35 @@ Status: implementation + review fixes complete locally; not yet merged.
 - Main-branch CI cannot contain this commit until the PR is merged; the links
   supplied with the review package are the PR CI and the current `main`
   baseline CI.
+
+## Round 2 blocking/medium review map
+
+Evidence: `docs/evidence/phase2b-review-red-first.log` (9 targeted tests failed on
+`22b1082` before these fixes), `docs/evidence/phase2b-meter-dedup-explain.log`
+(1,000,000-row EXPLAIN), `docs/evidence/phase2b-write-timings.log`, and
+`docs/evidence/phase2b-e2e-review.log`.
+
+| #   | Fix                                                                                  | Status                                            | Test / evidence                                                                            |
+| --- | ------------------------------------------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 1   | Retry dead-letters to default exchange/routing `evstation.ingest`, not `messages`    | Done                                              | `amqp-retry.live.test.ts`; queue definitions template                                      |
+| 2   | Sequential prefetch=1 + awaited dispatcher                                           | Done                                              | `events.test.ts > awaits handlers in order`                                                |
+| 3   | Thrown errors honour death count; poison ledger; timestamp validation                | Done                                              | `ingest.test.ts > parks thrown failure`; meter timestamp test                              |
+| 4   | Relative session energy with non-zero meterStart                                     | Done                                              | `phase2b-review.test.ts > session energy`                                                  |
+| 5   | Redelivered start response duplicate by correlation id                               | Done                                              | `phase2b-review.test.ts > redelivered start response`                                      |
+| 6   | Shared liveness helper, revival, sweep timestamps, ordering                          | Done                                              | `phase2b-review.test.ts > liveness`; E2E out-of-order                                      |
+| 7   | Tenant-aware meter dedup + `(session_id, charger_reported_at)` index                 | Done                                              | `session_meter_values_session_charger_idx`; EXPLAIN evidence                               |
+| 8   | Graceful shutdown waits for serial chain before ack/close                            | Done (dedicated broker shutdown test still a gap) | `createSerialDispatcher` test; close awaits chain                                          |
+| 9   | Advisory lock per job + in-process overlap guard                                     | Done                                              | `jobs.test.ts > allows only one runner`; `runJobs` guard                                   |
+| 10  | Column-level definer grants; no table INSERT on connectors for app                   | Done                                              | 0033 grants; `rls.test.ts` matrix                                                          |
+| 11  | Stale sessions use CSMS activity + station offline state                             | Done                                              | `phase2b-review.test.ts > stale sessions`                                                  |
+| 12  | Expired pending starts post `START_RESPONSE_MISSING`                                 | Done                                              | `phase2b-review.test.ts > expired pending starts`                                          |
+| 13  | Unknown units skipped, phase-less power sum, length caps, DB state validation        | Done                                              | `meter.test.ts`; `phase2b-review.test.ts` caps/state                                       |
+| 14  | Queue max-length/TTL + committed definitions template                                | Done                                              | `infra/compose/rabbitmq/evstation-ingest-definitions.json`, runbook                        |
+| 15  | AMQP error/close reflected in health                                                 | Done (no dedicated test)                          | worker `onState`, `/healthz`                                                               |
+| 16  | Worker counters and consumer lag                                                     | Done (no dedicated test)                          | `/metrics`, `evstation_worker_consumer_lag`                                                |
+| 17  | Platform-admin rejection read path + 30-day prune                                    | Done                                              | `/ingestion-rejections`, `prune_ingestion_rejections`                                      |
+| 18  | Register/retry lock, pool concurrency, write timings, horizon+3, first-of-month drop | Partial: non-UTC jobs-path test not added         | `api.test.ts > station lock`, `phase2b-review.test.ts > first-of-month`, jobs horizon test |
+
+Current per-workspace counts after round 2: db 98, api 76, worker 9,
+csms-adapter 13 passed + 4 skipped, shared 1, dashboard 59; root 256 passed,
+4 skipped.

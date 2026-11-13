@@ -57,6 +57,26 @@ async function reject(pool: Pool, ref: string | null, reason: string, event: Csm
   return 'ack' as const;
 }
 
+export async function handleFailure(
+  event: CsmsEvent,
+  pool: Pool,
+  maxRetries: number,
+): Promise<'ack' | 'retry'> {
+  if (event.deathCount < maxRetries) return 'retry';
+  const ref = stationRef(event) ?? 'INVALID';
+  const body = event.body;
+  const csmsTimestamp = timestampValue(body?.timestamp) ?? new Date().toISOString();
+  await call(pool, 'record_parked_event', [
+    ref,
+    eventRef(event),
+    csmsTimestamp,
+    stringValue(body?.kind) === 'connection' ? 'connection' : String(body?.action ?? 'unknown'),
+    'POISON',
+    hash(event),
+  ]);
+  return 'ack';
+}
+
 function eventRef(event: CsmsEvent): string {
   const correlation = stringValue(event.body?.correlationId) ?? 'unknown';
   return `frame:${String(event.body?.direction ?? 'inbound')}:${String(event.body?.action ?? 'unknown')}:${correlation}:0`;

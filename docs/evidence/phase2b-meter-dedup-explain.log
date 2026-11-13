@@ -1,0 +1,29 @@
+EXPLAIN (ANALYZE, BUFFERS) 1,000,000 meter rows with tenant/session/charger predicate
+                                                                                                  QUERY PLAN                                                                                                  
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.15..8.29 rows=1 width=4) (actual time=0.040..0.042 rows=1 loops=1)
+   Buffers: shared hit=2
+   ->  Append  (cost=0.15..40.88 rows=5 width=4) (actual time=0.038..0.039 rows=1 loops=1)
+         Buffers: shared hit=2
+         ->  Index Scan using session_meter_values_2026_11_session_id_charger_reported_at_idx on session_meter_values_2026_11 m_1  (cost=0.15..8.17 rows=1 width=4) (actual time=0.037..0.037 rows=1 loops=1)
+               Index Cond: ((session_id = 'b3dc8d0e-c161-4dbd-8615-2c859b98a9d8'::uuid) AND (charger_reported_at = '2026-11-12 00:00:00+00'::timestamp with time zone))
+               Filter: (tenant_id = '10000000-0000-4000-8000-000000000001'::uuid)
+               Buffers: shared hit=2
+         ->  Index Scan using session_meter_values_2026_12_session_id_charger_reported_at_idx on session_meter_values_2026_12 m_2  (cost=0.15..8.17 rows=1 width=4) (never executed)
+               Index Cond: ((session_id = 'b3dc8d0e-c161-4dbd-8615-2c859b98a9d8'::uuid) AND (charger_reported_at = '2026-11-12 00:00:00+00'::timestamp with time zone))
+               Filter: (tenant_id = '10000000-0000-4000-8000-000000000001'::uuid)
+         ->  Index Scan using session_meter_values_2027_01_session_id_charger_reported_at_idx on session_meter_values_2027_01 m_3  (cost=0.15..8.17 rows=1 width=4) (never executed)
+               Index Cond: ((session_id = 'b3dc8d0e-c161-4dbd-8615-2c859b98a9d8'::uuid) AND (charger_reported_at = '2026-11-12 00:00:00+00'::timestamp with time zone))
+               Filter: (tenant_id = '10000000-0000-4000-8000-000000000001'::uuid)
+         ->  Index Scan using session_meter_values_2027_02_session_id_charger_reported_at_idx on session_meter_values_2027_02 m_4  (cost=0.15..8.17 rows=1 width=4) (never executed)
+               Index Cond: ((session_id = 'b3dc8d0e-c161-4dbd-8615-2c859b98a9d8'::uuid) AND (charger_reported_at = '2026-11-12 00:00:00+00'::timestamp with time zone))
+               Filter: (tenant_id = '10000000-0000-4000-8000-000000000001'::uuid)
+         ->  Index Scan using session_meter_values_default_session_id_charger_reported_at_idx on session_meter_values_default m_5  (cost=0.15..8.17 rows=1 width=4) (never executed)
+               Index Cond: ((session_id = 'b3dc8d0e-c161-4dbd-8615-2c859b98a9d8'::uuid) AND (charger_reported_at = '2026-11-12 00:00:00+00'::timestamp with time zone))
+               Filter: (tenant_id = '10000000-0000-4000-8000-000000000001'::uuid)
+ Planning:
+   Buffers: shared hit=1017
+ Planning Time: 5.067 ms
+ Execution Time: 0.176 ms
+(24 rows)
+

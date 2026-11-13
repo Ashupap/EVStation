@@ -40,6 +40,10 @@ export interface WorkerConfig {
   staleSessionSeconds: number;
   offlineTimeoutSeconds: number;
   idTagRetentionDays: number;
+  rejectionRetentionDays: number;
+  amqpManagementUrl: string;
+  rabbitmqUser: string;
+  rabbitmqPassword: string;
 }
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
@@ -79,5 +83,9 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     staleSessionSeconds: number('STALE_SESSION_SECONDS', 86_400),
     offlineTimeoutSeconds: number('STATION_OFFLINE_TIMEOUT_SECONDS', 300),
     idTagRetentionDays: number('ID_TAG_RETENTION_DAYS', 365),
+    rejectionRetentionDays: number('INGESTION_REJECTION_RETENTION_DAYS', 30),
+    amqpManagementUrl: merged.RABBITMQ_MGMT_URL ?? 'http://127.0.0.1:15672/api',
+    rabbitmqUser: merged.RABBITMQ_ADMIN_USER ?? 'guest',
+    rabbitmqPassword: merged.RABBITMQ_ADMIN_PASS ?? 'guest',
   };
 }

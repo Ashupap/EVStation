@@ -23,7 +23,8 @@ export type Capability =
   | 'station.create'
   | 'station.update'
   | 'station.credentials.rotate'
-  | 'session.read';
+  | 'session.read'
+  | 'ingestion.read';
 
 export interface Resource {
   tenantId?: string;
@@ -49,7 +50,7 @@ export function authorize(
     return principal.id.length > 0;
   }
 
-  if (capability.startsWith('tenant.')) {
+  if (capability.startsWith('tenant.') || capability === 'ingestion.read') {
     return principal.isPlatformAdmin;
   }
 

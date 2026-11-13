@@ -51,6 +51,7 @@ const capabilities: Capability[] = [
   'station.update',
   'station.credentials.rotate',
   'session.read',
+  'ingestion.read',
 ];
 
 describe('permission matrix (one assertion per role per capability)', () => {

@@ -1,0 +1,308 @@
+
+ RUN  v5.0.5 /tmp/opencode/red-review
+
+ ❯ apps/worker/test/ingest.test.ts (3 tests | 1 failed | 2 skipped) 83ms
+   ❯ worker event dispositions (3)
+     × parks a thrown handler failure after the death limit and acks 58ms
+ ❯ packages/csms-adapter/test/events.test.ts (1 test | 1 failed) 20ms
+   ❯ AMQP serial dispatcher (1)
+     × awaits handlers in order instead of processing concurrently 14ms
+stdout | packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > session energy subtracts non-zero meterStart from the cumulative register
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > liveness revives a lost connected state and any frame updates last_seen
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > stale sessions require station offline and use CSMS activity time
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > expired pending starts write START_RESPONSE_MISSING to the ledger
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | apps/api/test/api.test.ts > station registration and credential rotation > takes the station lock for concurrent registration retries
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > invalid connection state is rejected in the database function
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+stdout | packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > partition drops require first-of-month p_before
+db:seed ok (1 platform admin, 2 tenants, 3 sites, 4 memberships)
+
+ ❯ apps/api/test/api.test.ts (56 tests | 1 failed | 53 skipped) 24370ms
+   ❯ station registration and credential rotation (12)
+     × takes the station lock for concurrent registration retries 865ms
+ ❯ packages/db/test/phase2b-review.test.ts (9 tests | 6 failed | 3 skipped) 26424ms
+   ❯ Phase 2b review fixes (9)
+     × session energy subtracts non-zero meterStart from the cumulative register 663ms
+     × liveness revives a lost connected state and any frame updates last_seen 542ms
+     × stale sessions require station offline and use CSMS activity time 615ms
+     × expired pending starts write START_RESPONSE_MISSING to the ledger 482ms
+     × invalid connection state is rejected in the database function 461ms
+     × partition drops require first-of-month p_before 487ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 9 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/api/test/api.test.ts > station registration and credential rotation > takes the station lock for concurrent registration retries
+AssertionError: expected [ 200, 200 ] to deeply equal [ 200, 409 ]
+
+- Expected
++ Received
+
+  [
+    200,
+-   409,
++   200,
+  ]
+
+ ❯ apps/api/test/api.test.ts:1804:21
+    1802|       const responses = await Promise.all([call(), call()]);
+    1803|       const codes = responses.map((response) => response.statusCode).s…
+    1804|       expect(codes).toEqual([200, 409]);
+       |                     ^
+    1805|     } finally {
+    1806|       await failingApp.close();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  apps/worker/test/ingest.test.ts > worker event dispositions > parks a thrown handler failure after the death limit and acks
+TypeError: handleFailure is not a function
+ ❯ apps/worker/test/ingest.test.ts:45:18
+     43|   it('parks a thrown handler failure after the death limit and acks', …
+     44|     const parked = pool('retry');
+     45|     expect(await handleFailure({ ...HASH_EVENT, deathCount: 5 }, parke…
+       |                  ^
+     46|     const calls = (parked.query as unknown as ReturnType<typeof vi.fn>…
+     47|     expect(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  packages/csms-adapter/test/events.test.ts > AMQP serial dispatcher > awaits handlers in order instead of processing concurrently
+TypeError: createSerialDispatcher is not a function
+ ❯ packages/csms-adapter/test/events.test.ts:9:22
+      7|     let active = 0;
+      8|     let maxActive = 0;
+      9|     const dispatch = createSerialDispatcher<number>(async (value) => {
+       |                      ^
+     10|       active += 1;
+     11|       maxActive = Math.max(maxActive, active);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+ FAIL  packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > session energy subtracts non-zero meterStart from the cumulative register
+AssertionError: expected '1500' to be '500' // Object.is equality
+
+Expected: "500"
+Received: "1500"
+
+ ❯ packages/db/test/phase2b-review.test.ts:102:40
+    100|       "SELECT energy_wh::text FROM app.sessions WHERE csms_transaction…
+    101|     );
+    102|     expect(session.rows[0]?.energy_wh).toBe('500');
+       |                                        ^
+    103|     await call(ingest, 'ingest_meter_values', [
+    104|       STATION_REF,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯
+
+ FAIL  packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > liveness revives a lost connected state and any frame updates last_seen
+AssertionError: expected 'disconnected' to be 'connected' // Object.is equality
+
+Expected: "connected"
+Received: "disconnected"
+
+ ❯ packages/db/test/phase2b-review.test.ts:171:47
+    169|       [stationId],
+    170|     );
+    171|     expect(runtime.rows[0]?.connection_state).toBe('connected');
+       |                                               ^
+    172|
+    173|     await db.superuser.query(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯
+
+ FAIL  packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > stale sessions require station offline and use CSMS activity time
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ packages/db/test/phase2b-review.test.ts:222:44
+    220|       'SELECT app.close_stale_sessions(86400) AS result',
+    221|     );
+    222|     expect(Number(result.rows[0]?.result)).toBe(0);
+       |                                            ^
+    223|     await db.superuser.query(
+    224|       "UPDATE app.station_runtime_state SET connection_state='disconne…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯
+
+ FAIL  packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > expired pending starts write START_RESPONSE_MISSING to the ledger
+AssertionError: expected [] to deeply equal [ { kind: 'start', …(1) } ]
+
+- Expected
++ Received
+
+- [
+-   {
+-     "kind": "start",
+-     "reason_code": "START_RESPONSE_MISSING",
+-   },
+- ]
++ []
+
+ ❯ packages/db/test/phase2b-review.test.ts:250:25
+    248|       "SELECT kind, reason_code FROM app.ingestion_events WHERE reason…
+    249|     );
+    250|     expect(ledger.rows).toEqual([{ kind: 'start', reason_code: 'START_…
+       |                         ^
+    251|   });
+    252|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯
+
+ FAIL  packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > invalid connection state is rejected in the database function
+AssertionError: expected 'accepted' to be 'rejected' // Object.is equality
+
+Expected: "rejected"
+Received: "accepted"
+
+ ❯ packages/db/test/phase2b-review.test.ts:262:7
+    260|         HASH,
+    261|       ]),
+    262|     ).toBe('rejected');
+       |       ^
+    263|   });
+    264|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
+
+ FAIL  packages/db/test/phase2b-review.test.ts > Phase 2b review fixes > partition drops require first-of-month p_before
+AssertionError: promise resolved "Result{ command: 'SELECT', …(9) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ Result {
++   "RowCtor": null,
++   "_parsers": [
++     [Function parseInteger],
++   ],
++   "_prebuiltEmptyResultObject": {
++     "drop_expired_event_partitions": null,
++   },
++   "_types": TypeOverrides {
++     "_types": {
++       "arrayParser": {
++         "create": [Function create],
++       },
++       "builtins": {
++         "ABSTIME": 702,
++         "ACLITEM": 1033,
++         "BIT": 1560,
++         "BOOL": 16,
++         "BPCHAR": 1042,
++         "BYTEA": 17,
++         "CHAR": 18,
++         "CID": 29,
++         "CIDR": 650,
++         "CIRCLE": 718,
++         "DATE": 1082,
++         "FLOAT4": 700,
++         "FLOAT8": 701,
++         "GTSVECTOR": 3642,
++         "INET": 869,
++         "INT2": 21,
++         "INT4": 23,
++         "INT8": 20,
++         "INTERVAL": 1186,
++         "JSON": 114,
++         "JSONB": 3802,
++         "MACADDR": 829,
++         "MACADDR8": 774,
++         "MONEY": 790,
++         "NUMERIC": 1700,
++         "OID": 26,
++         "PATH": 602,
++         "PG_DEPENDENCIES": 3402,
++         "PG_LSN": 3220,
++         "PG_NDISTINCT": 3361,
++         "PG_NODE_TREE": 194,
++         "POLYGON": 604,
++         "REFCURSOR": 1790,
++         "REGCLASS": 2205,
++         "REGCONFIG": 3734,
++         "REGDICTIONARY": 3769,
++         "REGNAMESPACE": 4089,
++         "REGOPER": 2203,
++         "REGOPERATOR": 2204,
++         "REGPROC": 24,
++         "REGPROCEDURE": 2202,
++         "REGROLE": 4096,
++         "REGTYPE": 2206,
++         "RELTIME": 703,
++         "SMGR": 210,
++         "TEXT": 25,
++         "TID": 27,
++         "TIME": 1083,
++         "TIMESTAMP": 1114,
++         "TIMESTAMPTZ": 1184,
++         "TIMETZ": 1266,
++         "TINTERVAL": 704,
++         "TSQUERY": 3615,
++         "TSVECTOR": 3614,
++         "TXID_SNAPSHOT": 2970,
++         "UUID": 2950,
++         "VARBIT": 1562,
++         "VARCHAR": 1043,
++         "XID": 28,
++         "XML": 142,
++       },
++       "getTypeParser": [Function getTypeParser],
++       "setTypeParser": [Function setTypeParser],
++     },
++     "binary": {},
++     "text": {},
++   },
++   "command": "SELECT",
++   "fields": [
++     Field {
++       "columnID": 0,
++       "dataTypeID": 23,
++       "dataTypeModifier": -1,
++       "dataTypeSize": 4,
++       "format": "text",
++       "name": "drop_expired_event_partitions",
++       "tableID": 0,
++     },
++   ],
++   "oid": null,
++   "rowAsArray": false,
++   "rowCount": 1,
++   "rows": [
++     {
++       "drop_expired_event_partitions": 0,
++     },
++   ],
+  }
+
+ ❯ packages/db/test/phase2b-review.test.ts:322:5
+    320|     await expect(
+    321|       jobs.query("SELECT app.drop_expired_event_partitions('session_me…
+    322|     ).rejects.toThrow(/first day of a month/);
+       |     ^
+    323|     await jobs.query("SELECT app.ensure_event_partition('session_meter…
+    324|     const dropped = await jobs.query<{ result: number }>(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯
+
+
+ Test Files  4 failed | 3 skipped (7)
+      Tests  9 failed | 2 passed | 69 skipped (80)
+   Start at  07:39:47
+   Duration  28.49s (tests 89%, import 7%, transform 4%)
+

@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import type { CsmsEvent } from '@evstation/csms-adapter';
-import { handleEvent } from '../src/ingest.js';
+import { handleEvent, handleFailure } from '../src/ingest.js';
 
 const HASH_EVENT: CsmsEvent = {
   routingKey: 'frame.inbound.MeterValues',
@@ -38,6 +38,19 @@ describe('worker event dispositions', () => {
     expect(await handleEvent({ ...HASH_EVENT, deathCount: 5 }, parked, 5)).toBe('ack');
     const calls = (parked.query as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.some(([sql]) => String(sql).includes('record_parked_event'))).toBe(true);
+  });
+
+  it('parks a thrown handler failure after the death limit and acks', async () => {
+    const parked = pool('retry');
+    expect(await handleFailure({ ...HASH_EVENT, deathCount: 5 }, parked, 5)).toBe('ack');
+    const calls = (parked.query as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(
+      calls.some(
+        ([sql, args]) =>
+          String(sql).includes('record_parked_event') && (args as unknown[])[4] === 'POISON',
+      ),
+    ).toBe(true);
+    expect(await handleFailure({ ...HASH_EVENT, deathCount: 1 }, pool('retry'), 5)).toBe('retry');
   });
 
   it('rejects malformed frames immediately without retrying', async () => {

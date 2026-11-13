@@ -54,14 +54,19 @@ await call('PUT', `/exchanges/${vhost}/evstation.ingest.dlx`, {
 await call('PUT', `/queues/${vhost}/evstation.ingest`, {
   durable: true,
   auto_delete: false,
-  arguments: { 'x-dead-letter-exchange': 'evstation.ingest.dlx' },
+  arguments: {
+    'x-dead-letter-exchange': 'evstation.ingest.dlx',
+    'x-max-length': 100000,
+    'x-overflow': 'drop-head',
+  },
 });
 await call('PUT', `/queues/${vhost}/evstation.ingest.retry`, {
   durable: true,
   auto_delete: false,
   arguments: {
     'x-message-ttl': 30000,
-    'x-dead-letter-exchange': 'messages',
+    'x-dead-letter-exchange': '',
+    'x-dead-letter-routing-key': 'evstation.ingest',
   },
 });
 const frameKeys = [

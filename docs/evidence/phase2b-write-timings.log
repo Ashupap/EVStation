@@ -1,0 +1,74 @@
+Phase 2b write timings (EXPLAIN ANALYZE, local PostgreSQL 16, E2E fixture data)
+
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=7.401..7.402 rows=1 loops=1)
+   Buffers: shared hit=673
+ Planning Time: 0.056 ms
+ Execution Time: 7.453 ms
+(4 rows)
+
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=6.814..6.815 rows=1 loops=1)
+   Buffers: shared hit=674
+ Planning Time: 0.055 ms
+ Execution Time: 6.867 ms
+(4 rows)
+
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=5.629..5.629 rows=1 loops=1)
+   Buffers: shared hit=674
+ Planning Time: 0.058 ms
+ Execution Time: 5.681 ms
+(4 rows)
+
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=9.428..9.429 rows=1 loops=1)
+   Buffers: shared hit=1323
+ Planning Time: 0.058 ms
+ Execution Time: 9.483 ms
+(4 rows)
+
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=11.105..11.106 rows=1 loops=1)
+   Buffers: shared hit=1322
+ Planning Time: 0.094 ms
+ Execution Time: 11.181 ms
+(4 rows)
+
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=10.123..10.123 rows=1 loops=1)
+   Buffers: shared hit=1322
+ Planning Time: 0.057 ms
+ Execution Time: 10.176 ms
+(4 rows)
+
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=12.384..12.385 rows=1 loops=1)
+   Buffers: shared hit=2241
+ Planning Time: 0.068 ms
+ Execution Time: 12.448 ms
+(4 rows)
+
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=14.182..14.183 rows=1 loops=1)
+   Buffers: shared hit=2241
+ Planning Time: 0.070 ms
+ Execution Time: 14.270 ms
+(4 rows)
+
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=32) (actual time=14.183..14.184 rows=1 loops=1)
+   Buffers: shared hit=2241
+ Planning Time: 0.059 ms
+ Execution Time: 14.241 ms
+(4 rows)
+
