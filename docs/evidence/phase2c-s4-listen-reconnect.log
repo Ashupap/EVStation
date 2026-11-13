@@ -1,0 +1,9 @@
+{
+  "seen": [
+    "before-disconnect",
+    "resync",
+    "after-reconnect"
+  ],
+  "missed": "while-disconnected",
+  "resyncAfterReconnect": true
+}

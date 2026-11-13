@@ -1,0 +1,8 @@
+{
+  "afterRollback": [],
+  "afterCommit": [
+    "commit-should-arrive"
+  ],
+  "rollbackDelivered": 0,
+  "commitDelivered": 1
+}
