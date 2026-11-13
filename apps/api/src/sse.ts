@@ -568,20 +568,31 @@ export class SseHub {
     if (connection.refresh) clearTimeout(connection.refresh);
     if (connection.expiry) clearTimeout(connection.expiry);
     const frame = `event: closed\ndata: ${JSON.stringify({ reason })}\n\n`;
-    try {
-      if (reason === 'client_closed' || reason === 'client_error') {
-        connection.response.raw.end();
-      } else if (reason === 'backpressure') {
-        connection.response.raw.write(frame);
-        setTimeout(() => connection.response.raw.destroy(), 10).unref();
-      } else {
-        connection.response.raw.end(frame);
-        setTimeout(() => {
-          if (!connection.response.raw.destroyed) connection.response.raw.destroy();
-        }, 250).unref();
+    const raw = connection.response.raw;
+    if (reason === 'client_closed' || reason === 'client_error') {
+      raw.destroy();
+      return;
+    }
+    if (reason === 'backpressure') {
+      try {
+        raw.write(frame);
+      } catch {
+        /* best effort for a client that is not reading */
       }
+      raw.destroy();
+      return;
+    }
+    const grace = setTimeout(() => {
+      if (!raw.destroyed) raw.destroy();
+    }, 1_000);
+    grace.unref();
+    raw.once('finish', () => clearTimeout(grace));
+    raw.once('close', () => clearTimeout(grace));
+    try {
+      raw.end(frame);
     } catch {
-      connection.response.raw.destroy();
+      clearTimeout(grace);
+      raw.destroy();
     }
   }
 
