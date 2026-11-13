@@ -9,7 +9,7 @@ let upstreamRequests = 0;
 let upstreamCloses = 0;
 
 beforeAll(async () => {
-  process.env.NODE_ENV = 'test';
+  (process.env as Record<string, string | undefined>).NODE_ENV = 'test';
   process.env.OIDC_ISSUER = 'http://keycloak.test/realms/evstation';
   process.env.OIDC_CLIENT_ID = 'dashboard';
   process.env.OIDC_CLIENT_SECRET = 'test';
@@ -47,6 +47,7 @@ describe('dashboard events BFF abort', () => {
           accessExpiresAt: Date.now() + 60_000,
           absoluteExpiresAt: Date.now() + 60_000,
           tenantId: '10000000-0000-4000-8000-000000000001',
+          lastSeenAt: Date.now(),
         },
       }));
       expect(response.status).toBe(200);
