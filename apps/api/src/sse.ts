@@ -49,6 +49,10 @@ function positiveEnv(name: string, fallback: number): number {
   return value;
 }
 
+function scopeCanSeeSite(role: string, siteIds: string[], siteId: string): boolean {
+  return role === 'tenant_admin' || role === 'viewer' || siteIds.includes(siteId);
+}
+
 const MAX_PER_USER = Number(process.env.SSE_MAX_PER_USER ?? '10');
 const MAX_PER_TENANT = Number(process.env.SSE_MAX_PER_TENANT ?? '250');
 const MAX_PER_PROCESS = Number(process.env.SSE_MAX_PROCESS ?? '2000');
@@ -373,8 +377,7 @@ export class SseHub {
       .filter(
         (connection) =>
           connection.scope.tenantId === payload.tenant_id &&
-          (connection.scope.role === 'tenant_admin' ||
-            connection.scope.siteIds.includes(payload.site_id!)),
+          scopeCanSeeSite(connection.scope.role, connection.scope.siteIds, payload.site_id!),
       )
       .sort((a, b) => {
         const rank = (role: string) =>
@@ -622,12 +625,6 @@ export class SseHub {
       });
       if ('reason' in checked) {
         this.closeConnection(connection, checked.reason ?? 'membership_removed');
-        return;
-      }
-      const rank = (role: string) =>
-        role === 'tenant_admin' ? 0 : role === 'site_manager' ? 1 : 2;
-      if (rank(checked.membership.role) > rank(connection.scope.role)) {
-        this.closeConnection(connection, 'role_demoted');
         return;
       }
       if (
