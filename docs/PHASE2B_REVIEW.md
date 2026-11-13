@@ -4,6 +4,8 @@ Implementation commit: `1b7ffcd7336001fbc8846166d5b48d78dd479aaf`
 
 Round 2 review-fix commit: `0753205ebd3c563b3ae55d4cf327296a6e36efdf`
 
+Round 3 merge-gate commit: `010be9a15e0ec80fe3db384b1912e3a25e22f7e9`
+
 Status: implementation + review fixes complete locally; not yet merged.
 
 ## Evidence
