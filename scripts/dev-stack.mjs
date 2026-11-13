@@ -109,6 +109,10 @@ function ensureEnv() {
     OUR_DB_PASSWORD: secret(),
     OUR_DB_OWNER_PASSWORD: secret(),
     OUR_DB_APP_PASSWORD: secret(),
+    OUR_DB_INGEST_PASSWORD: secret(),
+    OUR_DB_JOBS_PASSWORD: secret(),
+    OUR_AMQP_WORKER_PASSWORD: secret(),
+    OUR_AMQP_MONITOR_PASSWORD: secret(),
     KC_BOOTSTRAP_ADMIN_USERNAME: 'dev_admin',
     KC_BOOTSTRAP_ADMIN_PASSWORD: secret(),
     KC_DASHBOARD_CLIENT_SECRET: secret(),
@@ -273,6 +277,13 @@ switch (command) {
     if (overlay.status !== 0) {
       console.error('dev-stack: Hasura adapter overlay failed');
       process.exit(overlay.status ?? 1);
+    }
+    const amqp = spawnSync(process.execPath, [path.join(repoRoot, 'scripts/provision-amqp.mjs')], {
+      stdio: 'inherit',
+    });
+    if (amqp.status !== 0) {
+      console.error('dev-stack: AMQP ingestion provisioning failed');
+      process.exit(amqp.status ?? 1);
     }
     ensureDashboardEnv();
     console.log('dev-stack: stack is up. See docs/RUNBOOK.md for the port map.');

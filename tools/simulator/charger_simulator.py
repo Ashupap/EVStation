@@ -154,6 +154,11 @@ class Charger:
                     {"value": "30000", "measurand": "Power.Active.Import", "unit": "W"},
                 ]}]})
 
+        # 5b. Report finishing before the stop (five StatusNotifications total).
+        await self.call("StatusNotification", {
+            "connectorId": 1, "errorCode": "NoError",
+            "status": "Finishing", "timestamp": now()})
+
         # 6. Stop (OCPP 1.6J StopTransaction.conf has no `status` field; a
         # CallResult frame arriving at all means the CSMS processed it)
         await self.call("StopTransaction", {

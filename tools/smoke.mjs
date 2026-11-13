@@ -15,6 +15,7 @@
 // override them via SMOKE_STATION_ID / SMOKE_ID_TAG / SMOKE_LOCATION_NAME.
 
 import { spawnSync } from 'node:child_process';
+import pg from 'pg';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +24,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const envFile = path.join(repoRoot, 'infra/compose/.env');
 
-const STATION_ID = process.env.SMOKE_STATION_ID ?? 'cp001';
+const APP_STATION_REF = process.env.SMOKE_APP_STATION_REF;
+const STATION_ID = process.env.SMOKE_STATION_ID ?? APP_STATION_REF ?? 'cp001';
 const ID_TAG = process.env.SMOKE_ID_TAG ?? 'DEADBEEF';
 const LOCATION_NAME = process.env.SMOKE_LOCATION_NAME ?? 'Sim Alley';
 const TENANT_ID = 1;
@@ -193,6 +195,106 @@ function findSimPython() {
   return null;
 }
 
+function appDatabaseUrl() {
+  if (env.DATABASE_URL_MIGRATOR) return env.DATABASE_URL_MIGRATOR;
+  const host = env.OUR_DB_HOST ?? 'localhost';
+  const port = env.OUR_DB_HOST_PORT ?? '5432';
+  const password = env.OUR_DB_PASSWORD;
+  if (!password) throw new Error('OUR_DB_PASSWORD missing in infra/compose/.env');
+  return `postgres://${encodeURIComponent('evstation')}:${encodeURIComponent(password)}@${host}:${port}/evstation`;
+}
+
+async function ensureAppStation() {
+  const client = new pg.Client({ connectionString: appDatabaseUrl() });
+  await client.connect();
+  try {
+    const existing = await client.query(
+      `SELECT s.id, s.tenant_id, s.site_id, c.id AS connector_id
+       FROM app.stations s LEFT JOIN app.connectors c ON c.station_id = s.id AND c.connector_number = 1
+       WHERE s.station_ref = $1`,
+      [APP_STATION_REF],
+    );
+    if (existing.rows[0]) return existing.rows[0];
+    const scope = await client.query(
+      `SELECT t.id AS tenant_id, t.org_code, site.id AS site_id, site.site_code
+       FROM app.tenants t JOIN app.sites site ON site.tenant_id = t.id
+       WHERE t.slug = 'acme' ORDER BY site.created_at LIMIT 1`,
+    );
+    const row = scope.rows[0];
+    if (!row)
+      throw new Error('Acme seed tenant/site missing — run pnpm db:migrate && pnpm db:seed');
+    const station = await client.query(
+      `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref, registration_status)
+       VALUES ($1, $2, $3, $4, 'registered') RETURNING id`,
+      [row.tenant_id, row.site_id, row.org_code, APP_STATION_REF],
+    );
+    const stationId = station.rows[0].id;
+    const connector = await client.query(
+      `INSERT INTO app.connectors (tenant_id, site_id, station_id, connector_number)
+       VALUES ($1, $2, $3, 1) RETURNING id`,
+      [row.tenant_id, row.site_id, stationId],
+    );
+    return {
+      id: stationId,
+      tenant_id: row.tenant_id,
+      site_id: row.site_id,
+      connector_id: connector.rows[0].id,
+    };
+  } finally {
+    await client.end();
+  }
+}
+
+async function verifyAppIngestion(transactionRef, fixture) {
+  const client = new pg.Client({ connectionString: appDatabaseUrl() });
+  await client.connect();
+  try {
+    let session;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const result = await client.query(
+        `SELECT s.id, s.status, s.energy_wh, s.ended_at, s.stop_reason
+         FROM app.sessions s
+         WHERE s.station_id = $1 AND s.csms_transaction_ref = $2`,
+        [fixture.id, String(transactionRef)],
+      );
+      session = result.rows[0];
+      if (session?.status === 'completed' && session.ended_at) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    if (!session) {
+      fail('app-session', `no app.sessions row for transaction ${transactionRef}`);
+      return;
+    }
+    if (session.status !== 'completed' || !session.ended_at) {
+      fail('app-session', `status=${session.status} ended_at=${session.ended_at}`);
+      return;
+    }
+    ok('app-session', `completed, stop_reason=${session.stop_reason}`);
+    if (Number(session.energy_wh) > 0) ok('app-energy', `${session.energy_wh} Wh`);
+    else fail('app-energy', `energy_wh=${session.energy_wh}`);
+    const meters = await client.query(
+      'SELECT count(*)::int AS n FROM app.session_meter_values WHERE session_id = $1',
+      [session.id],
+    );
+    if (meters.rows[0].n > 0) ok('app-meter', `${meters.rows[0].n} samples`);
+    else fail('app-meter', 'no meter samples');
+    const station = await client.query(
+      'SELECT reported_vendor, reported_model FROM app.stations WHERE id = $1',
+      [fixture.id],
+    );
+    if (station.rows[0]?.reported_vendor) {
+      ok(
+        'app-boot',
+        `reported ${station.rows[0].reported_vendor}/${station.rows[0].reported_model}`,
+      );
+    } else {
+      fail('app-boot', 'reported_vendor was not recorded');
+    }
+  } finally {
+    await client.end();
+  }
+}
+
 async function main() {
   try {
     const res = await fetch(`${HASURA}/healthz`, { signal: AbortSignal.timeout(5000) });
@@ -220,6 +322,16 @@ async function main() {
   } catch (err) {
     fail('fixtures', String(err?.message ?? err));
     return;
+  }
+  let appFixture;
+  if (APP_STATION_REF) {
+    try {
+      appFixture = await ensureAppStation();
+      ok('app-fixture', `station ${APP_STATION_REF} ready`);
+    } catch (err) {
+      fail('app-fixture', String(err?.message ?? err));
+      return;
+    }
   }
 
   const before = await gql(`query { Transactions_aggregate { aggregate { count } } }`);
@@ -279,7 +391,7 @@ async function main() {
     const checks = [
       ['transactionId', String(t.transactionId) === txnId, `this run's id (${t.transactionId})`],
       ['stationId', t.stationId === stationPk, `== created station pk ${stationPk}`],
-      ['connectorId', t.connectorId === CONNECTOR_ID, `== ${CONNECTOR_ID}`],
+      ['connectorId', t.connectorId === connectorId, `== ${connectorId}`],
       ['authorizationId', t.authorizationId === authId, `== upserted authorization pk ${authId}`],
       ['totalKwh', Number(t.totalKwh) > 0, `energy recorded (${t.totalKwh} kWh)`],
       ['endTime', t.endTime != null, `closed (${t.endTime ?? 'still open'})`],
@@ -288,6 +400,7 @@ async function main() {
       if (passed) ok(what, detail);
       else fail(what, detail);
     }
+    if (APP_STATION_REF && appFixture) await verifyAppIngestion(txnId, appFixture);
   }
 
   const boots = await gql(

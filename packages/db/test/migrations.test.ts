@@ -1,7 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { migrate } from '../scripts/migrate.mjs';
 import { checksumSql, migrationFiles } from '../scripts/lib.mjs';
-import { APP_PASSWORD, OWNER_PASSWORD, startDb, stopDb, type TestDb } from './helpers.js';
+import {
+  APP_PASSWORD,
+  INGEST_PASSWORD,
+  JOBS_PASSWORD,
+  OWNER_PASSWORD,
+  startDb,
+  stopDb,
+  type TestDb,
+} from './helpers.js';
 
 let db: TestDb;
 
@@ -35,6 +43,8 @@ test('0020 upgrades legacy duplicate/short org and site codes safely', async () 
       migratorUrl: legacy.migratorUrl,
       ownerPassword: OWNER_PASSWORD,
       appPassword: APP_PASSWORD,
+      ingestPassword: INGEST_PASSWORD,
+      jobsPassword: JOBS_PASSWORD,
     });
     const tenants = await legacy.superuser.query<{ org_code: string }>(
       'SELECT org_code FROM app.tenants WHERE id IN ($1, $2) ORDER BY org_code',
@@ -87,6 +97,8 @@ describe('migration integrity', () => {
           migratorUrl: db.migratorUrl,
           ownerPassword: OWNER_PASSWORD,
           appPassword: APP_PASSWORD,
+          ingestPassword: INGEST_PASSWORD,
+          jobsPassword: JOBS_PASSWORD,
         }),
       ).rejects.toThrow(/0008_ensure_actor\.sql checksum mismatch/);
     } finally {
@@ -108,6 +120,8 @@ describe('migration integrity', () => {
       migratorUrl: db.migratorUrl,
       ownerPassword: OWNER_PASSWORD,
       appPassword: APP_PASSWORD,
+      ingestPassword: INGEST_PASSWORD,
+      jobsPassword: JOBS_PASSWORD,
     });
 
     const { rows } = await db.superuser.query<{ checksum: string }>(

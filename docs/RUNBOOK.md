@@ -286,6 +286,41 @@ host — shared/staging/production or any network reachable by real chargers —
 until steps 1–4 are done and the Phase 1 unknown-station rejection test
 passes in CI. Nothing hard-gates a local-only deployment slice.
 
+## Phase 2b ingestion worker
+
+`pnpm worker` consumes the provisioned `evstation.ingest` queue as
+`evstation_worker`. It has execute-only database access through
+`evstation_ingest` and cannot publish, declare queues or read `messages.ocpp`.
+Health is `GET http://127.0.0.1:4100/healthz`.
+
+`pnpm dev:stack` creates the RabbitMQ user, the main/retry queues, the DLX and
+the exact bindings (rerun `node scripts/provision-amqp.mjs` if they are
+missing). A failed handler is nacked to the retry queue with a 30 s TTL. The retry
+queue dead-letters through the default exchange with routing key
+`evstation.ingest`, never back through `messages` (that would reach
+CitrineOS's own consumers). After five retries the worker writes a `parked`
+ingestion ledger row and acks. The committed production definition template is
+`infra/compose/rabbitmq/evstation-ingest-definitions.json`; the dev stack
+script applies the same definitions idempotently.
+Inspect `evstation.ingest`/`evstation.ingest.retry` in the RabbitMQ management
+UI at `http://127.0.0.1:15672`. The worker also runs expired pending starts,
+offline sweeps, stale-session closure, idTag pseudonymization, monthly
+partition creation and retention drops on `WORKER_JOB_INTERVAL_MS` (default
+60 s). Tune `STALE_SESSION_SECONDS`, `STATION_OFFLINE_TIMEOUT_SECONDS`,
+`ID_TAG_RETENTION_DAYS`, `METER_RETENTION_DAYS`, `STATUS_EVENT_RETENTION_DAYS`
+and `INGESTION_LEDGER_RETENTION_DAYS` there. The offline sweeper currently
+uses the configured timeout only; until heartbeat-interval tracking lands,
+commission chargers with a boot heartbeat interval **<= timeout / 3**.
+
+The 2b end-to-end smoke is:
+
+```shell
+SMOKE_STATION_ID=ACME-BLR-001 SMOKE_APP_STATION_REF=ACME-BLR-001 pnpm smoke
+```
+
+It creates the app station fixture, runs the simulator and waits for the
+worker to finish the session, meter samples and boot fields.
+
 ## Troubleshooting
 
 - **`git ls-remote` fails in `dev:bootstrap`** — no network to GitHub, or a

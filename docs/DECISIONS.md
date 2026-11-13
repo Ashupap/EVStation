@@ -771,8 +771,9 @@ email)` owned by `evstation_definer` (atomic: membership insert +
   migration/superuser-invoked helper: it detaches the default partition, creates
   the monthly partition, moves matching default rows with
   `OVERRIDING SYSTEM VALUE`, reattaches the default, and applies
-  `ENABLE/FORCE RLS` plus `REVOKE` to the new child. It is not granted to the
-  app/worker roles.
+  `ENABLE/FORCE RLS` plus `REVOKE` to the new child. As of 2b it is
+  SECURITY DEFINER owned by `evstation_event_owner` and granted only to
+  `evstation_jobs`; the app and ingest login roles cannot run it.
 - **Consequences.** Dropping old data is a partition operation, not row-by-row
   DELETE. Direct child access is denied; queries go through the parent RLS
   policies. A replay with the same event ref but a different envelope timestamp
@@ -794,5 +795,89 @@ email)` owned by `evstation_definer` (atomic: membership insert +
    station without the marker.
 3. Live Hasura permissions and Keycloak service-account tests run in the smoke
    workflow, not in the required PR CI (they need the live stack).
-4. Ingest roles, AMQP consumer, SSE and session/meter ingestion are PR 2b/2c
-   scope; no ingest credentials are granted to the API or browser in 2a.
+4. Session/meter ingestion and the AMQP worker land in 2b. Live session
+   streaming (SSE) remains PR 2c scope; no ingest credential is granted to the
+   browser or API runtime.
+
+### ADR-0026: Phase 2b ingestion uses a dedicated AMQP worker and SECURITY DEFINER functions
+
+- **Context.** CitrineOS publishes every OCPP frame and connection transition
+  on its `messages` topic exchange. The app role must never receive broad
+  `frame.#` access, and the worker must not be able to publish or mutate
+  arbitrary tenant rows.
+- **Decision.** `evstation_ingest` is a LOGIN/NOBYPASSRLS role with EXECUTE
+  only on narrowly named ingestion functions. A NOLOGIN/BYPASSRLS
+  `evstation_ingest_definer` owns those functions and derives tenant/site from
+  `station_ref`; callers cannot pass tenant/site. Event tables are owned by
+  `evstation_event_owner` (also BYPASSRLS) so partition maintenance can run
+  without broad table grants. `evstation_jobs` is a LOGIN/NOBYPASSRLS
+  execute-only role for sweeper/retention functions. The worker consumes only
+  `frame.inbound.{BootNotification,StatusNotification,Heartbeat,StartTransaction,MeterValues,StopTransaction}`,
+  `frame.outbound.StartTransaction`, `connection.connected` and
+  `connection.closed` from `evstation.ingest`.
+- **Retry.** The main queue dead-letters to `evstation.ingest.dlx`, which routes
+  to `evstation.ingest.retry` with a fixed 30 s TTL and back to `messages`.
+  The worker nacks with `requeue=false`; it never publishes. After five
+  retries (`x-death` count) it writes a `parked` ledger row and acks. Malformed
+  frames are recorded as collapsed rejections and acked immediately.
+- **Idempotency.** `csms_event_ref` is
+  `frame:<direction>:<action>:<correlationId>:<sampleIndex>` and connection refs
+  include station/state/envelope timestamp. Unique keys include the envelope
+  timestamp. Meter rows additionally dedupe by `(session_id,
+charger_reported_at)` because sample replay can arrive with a new envelope.
+  A new accepted start response supersedes an existing live session on that
+  connector (`stop_reason='superseded'`); stop is idempotent per transaction.
+- **Ledger/volume.** Accepted heartbeats, status events and meter samples are
+  not ledgered. The ledger contains rejected/parked events plus low-volume
+  boot/connection/start/stop lifecycle. Unknown-station floods collapse by
+  `(station_ref, reason_code, day)` with `occurrence_count`.
+- **Known limitation.** The same event ref with a different envelope timestamp
+  is not deduplicated. This is intentional for the first ingestion slice;
+  a body-hash fallback would require a separately indexed dedup store.
+
+### ADR-0027: Ingestion sharding plan for sustained rates above ~175 msg/s
+
+- **Context.** The round-2 benchmark (`docs/evidence/phase2b-throughput.log`)
+  published 12,000 mixed heartbeat/status/meter/start/stop messages over 60 s
+  (200 msg/s target) through the real worker and PostgreSQL. With
+  `prefetch(1)` and strictly sequential writes, p50 was 2.48 ms, p95 4.68 ms,
+  CPU was 17.6%, the post-publish drain took 9.19 s, and sustained throughput
+  was ~173 msg/s with a maximum sampled queue depth of 90. That is acceptable
+  for the pilot volume but below the 200 msg/s target.
+- **Decision.** Keep one ordered queue and `prefetch(1)` for correctness at the
+  pilot rate, but plan sharding before the 500-station/200 msg/s target:
+  1. Partition the ingest exchange by a stable station shard (`consistent_hash`
+     on `ocppConnectionName` if the RabbitMQ plugin is available; otherwise
+     application-side shard routing).
+  2. Run one worker consumer group per shard, each with its own ordered queue
+     and the same SECURITY DEFINER functions. Sessions never span shards, so
+     ordering is preserved per station.
+  3. Keep the single-writer-per-session invariant inside each shard; meter
+     and stop events stay ordered by station.
+  4. Add a shard-aware consumer-lag dashboard and per-shard queue-depth alerts.
+  5. Re-run this benchmark with 200 msg/s across at least four shards before
+     raising the target.
+- **Consequences.** No migration is needed for the pilot; the existing
+  `evstation.ingest` queue remains the single-shard implementation. The
+  sharding work is deferred until the load target requires it and is tracked
+  as a known limitation.
+
+## Known issues (Phase 2b round 2)
+
+1. Heartbeat-derived offline timeout is not implemented. The sweeper uses the
+   configured timeout only; RUNBOOK requires a charger's boot heartbeat
+   interval to be **<= timeout / 3** until interval tracking lands.
+2. There is no dedicated broker shutdown test. The serial-chain shutdown is
+   covered by unit ordering tests and the E2E drain/replay proof.
+3. There is no non-UTC jobs-path test. Job month boundaries are computed in
+   UTC, but a process-level TZ test is still missing.
+4. `0033` intentionally removed table-level `connectors` UPDATE from
+   `evstation_app`; station/event writes are worker-only. A future connector
+   PATCH route will need column-level UPDATE grants added deliberately.
+5. `session_meter_values.energy_wh` is the cumulative charger register;
+   `sessions.energy_wh` is relative to `meter_start_wh`. API consumers must not
+   compare the two directly.
+6. `GET /sessions/:id` returns at most 200 meter samples by design.
+7. `evstation_worker_events_parked_total` currently increments only for
+   handler-thrown `POISON` parking. `RETRY_EXHAUSTED` parking is in the ledger
+   but is counted as an ack, so the metric under-reports that path.

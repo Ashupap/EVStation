@@ -15,12 +15,14 @@ import { dbCredentials, isCliEntry, migrationFiles } from './lib.mjs';
 const LOCK_KEY = 8242001;
 
 /**
- * @param {{migratorUrl: string, ownerPassword: string, appPassword: string, untilFile?: string, log?: (line: string) => void}} options
+ * @param {{migratorUrl: string, ownerPassword: string, appPassword: string, ingestPassword: string, jobsPassword: string, untilFile?: string, log?: (line: string) => void}} options
  */
 export async function migrate({
   migratorUrl,
   ownerPassword,
   appPassword,
+  ingestPassword,
+  jobsPassword,
   untilFile = undefined,
   log = () => {},
 }) {
@@ -32,6 +34,10 @@ export async function migrate({
   try {
     await client.query("SELECT set_config('evstation.owner_password', $1, false)", [ownerPassword]);
     await client.query("SELECT set_config('evstation.app_password', $1, false)", [appPassword]);
+    await client.query("SELECT set_config('evstation.ingest_password', $1, false)", [
+      ingestPassword,
+    ]);
+    await client.query("SELECT set_config('evstation.jobs_password', $1, false)", [jobsPassword]);
     await client.query('SELECT pg_advisory_lock($1)', [LOCK_KEY]);
     await client.query(`
       CREATE TABLE IF NOT EXISTS public.schema_migrations (
@@ -95,6 +101,8 @@ if (isCliEntry(import.meta.url)) {
     migratorUrl: migrator,
     ownerPassword: passwords.owner,
     appPassword: passwords.app,
+    ingestPassword: passwords.ingest,
+    jobsPassword: passwords.jobs,
     log: (line) => console.log(`db:migrate ${line}`),
   });
   console.log('db:migrate ok');

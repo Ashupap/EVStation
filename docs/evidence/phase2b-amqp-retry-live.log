@@ -1,0 +1,9 @@
+
+ RUN  v5.0.5 /home/ubuntu/EVStation
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  08:44:34
+   Duration  10.63s (tests 99%, transform 1%, import 1%)
+

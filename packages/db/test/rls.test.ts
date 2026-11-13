@@ -187,6 +187,7 @@ describe('role attributes and object ownership', () => {
       'connectors',
       'email_outbox',
       'ingestion_events',
+      'ingestion_rejections',
       'invitations',
       'membership_sites',
       'memberships',
@@ -1304,7 +1305,7 @@ describe('database catalog invariants', () => {
     const expected: Record<string, string[]> = {
       audit_log: ['SELECT', 'INSERT'],
       connectors: ['SELECT'],
-      ingestion_events: [],
+      ingestion_events: ['SELECT'],
       invitations: ['SELECT'],
       membership_sites: ['SELECT', 'INSERT', 'DELETE'],
       memberships: ['SELECT', 'INSERT', 'DELETE'],
@@ -1347,7 +1348,6 @@ describe('database catalog invariants', () => {
       ['stations', 'station_ref', 'INSERT'],
       ['stations', 'vendor', 'UPDATE'],
       ['connectors', 'connector_number', 'INSERT'],
-      ['connectors', 'last_status_at', 'UPDATE'],
     ];
     for (const [table, column, privilege] of columnGrants) {
       const { rows } = await db.superuser.query<{ ok: boolean }>(

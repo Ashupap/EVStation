@@ -34,6 +34,21 @@ export interface CsmsHealth {
   hasura: boolean;
 }
 
+export interface CsmsEvent {
+  routingKey: string;
+  raw: string;
+  body: Record<string, unknown> | null;
+  parseError?: 'INVALID_JSON';
+  redelivered: boolean;
+  deathCount: number;
+}
+
+export type CsmsEventDisposition = 'ack' | 'retry';
+
+export type CsmsEventHandler = (
+  event: CsmsEvent,
+) => Promise<CsmsEventDisposition | void> | CsmsEventDisposition | void;
+
 export interface CsmsAdapter {
   registerStation(input: StationRegistrationInput): Promise<StationRegistrationResult>;
   provisionPassword(stationRef: string): Promise<string>;
@@ -41,7 +56,7 @@ export interface CsmsAdapter {
   getStationStatus(stationRef: string): Promise<StationStatus | null>;
   listStations(): Promise<StationStatus[]>;
   sendCommand(stationRef: string, command: string, params: unknown): Promise<never>;
-  subscribeEvents(handler: (event: unknown) => Promise<void>): Promise<{ close(): Promise<void> }>;
+  subscribeEvents(handler: CsmsEventHandler): Promise<{ close(): Promise<void> }>;
   health(): Promise<CsmsHealth>;
 }
 

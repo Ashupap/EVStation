@@ -1,0 +1,16 @@
+{
+  "stationRef": "ACME-BLR-999",
+  "stationId": "1d524607-0eaf-4784-ae7c-3cf4ffee7e81",
+  "requested_messages": 12000,
+  "target_rate_per_second": 200,
+  "publish_seconds": 60.001,
+  "drain_seconds": 9.194,
+  "final_queue_depth": 0,
+  "max_queue_depth": 90,
+  "worker_received": 12006,
+  "p50_ms": 2.4781220000004396,
+  "p95_ms": 4.681945000003907,
+  "queue_depth_available": 1,
+  "worker_cpu_percent": 17.6,
+  "approximate_throughput_per_second": 173.4
+}

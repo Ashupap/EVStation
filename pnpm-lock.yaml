@@ -11,6 +11,9 @@ importers:
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      amqplib:
+        specifier: 2.2.0
+        version: 2.2.0
       eslint:
         specifier: 10.14.0
         version: 10.14.0(jiti@2.7.0)
@@ -23,6 +26,9 @@ importers:
       lint-staged:
         specifier: 17.6.0
         version: 17.6.0
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
       prettier:
         specifier: 3.9.10
         version: 3.9.10
@@ -146,7 +152,31 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
-  packages/csms-adapter: {}
+  apps/worker:
+    dependencies:
+      '@evstation/csms-adapter':
+        specifier: workspace:*
+        version: link:../../packages/csms-adapter
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+
+  packages/csms-adapter:
+    dependencies:
+      amqplib:
+        specifier: 2.2.0
+        version: 2.2.0
+    devDependencies:
+      '@types/amqplib':
+        specifier: 0.10.8
+        version: 0.10.8
 
   packages/db:
     dependencies:
@@ -1331,6 +1361,9 @@ packages:
   '@testcontainers/postgresql@12.2.1':
     resolution: {integrity: sha512-MIbI5KjZ9M4SY4+xzxg/w4ZLBeV+Jd6ognXoWn7dh/mhIhBbn7ss0MiZHNg2XbCbu03BW9YQ9+H9xW8PFkJWaA==}
 
+  '@types/amqplib@0.10.8':
+    resolution: {integrity: sha512-vtDp8Pk1wsE/AuQ8/Rgtm6KUZYqcnTgNvEHwzCkX8rL7AGsC6zqAfKAAJhUZXFhM/Pp++tbnUHiam/8vVpPztA==}
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -1481,6 +1514,10 @@ packages:
 
   ajv@8.20.0:
     resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
+
+  amqplib@2.2.0:
+    resolution: {integrity: sha512-VifzN9aHs/Q3zTruVHXh2yCisQyXexBN91CQ2E5iSyUKyNjH6ilYhJGte5AXZH/Bj1PaH7SwPhyuSf6Msd2udw==}
+    engines: {node: '>=18'}
 
   ansi-regex@5.0.1:
     resolution: {integrity: sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ==}
@@ -3748,6 +3785,10 @@ snapshots:
       - react-native-b4a
       - supports-color
 
+  '@types/amqplib@0.10.8':
+    dependencies:
+      '@types/node': 26.6.5
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -3938,6 +3979,8 @@ snapshots:
       fast-uri: 3.1.9
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
+
+  amqplib@2.2.0: {}
 
   ansi-regex@5.0.1: {}
 

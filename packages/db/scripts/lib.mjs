@@ -44,6 +44,8 @@ export function dbCredentials() {
     migrator: process.env.OUR_DB_PASSWORD || compose.OUR_DB_PASSWORD,
     owner: process.env.OUR_DB_OWNER_PASSWORD || compose.OUR_DB_OWNER_PASSWORD,
     app: process.env.OUR_DB_APP_PASSWORD || compose.OUR_DB_APP_PASSWORD,
+    ingest: process.env.OUR_DB_INGEST_PASSWORD || compose.OUR_DB_INGEST_PASSWORD,
+    jobs: process.env.OUR_DB_JOBS_PASSWORD || compose.OUR_DB_JOBS_PASSWORD,
   };
 
   return {

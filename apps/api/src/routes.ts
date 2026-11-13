@@ -77,6 +77,10 @@ const InvitationCreate = z
   .strict();
 const InvitationAccept = z.object({ token: z.string().min(20).max(512) }).strict();
 const IdParams = z.object({ id: uuid }).strict();
+
+function maskIdTag(value: string | null): string | null {
+  return value ? `****${value.slice(-4)}` : null;
+}
 const InvitationParams = z.object({ tenantId: uuid, invitationId: uuid }).strict();
 const TenantParams = z.object({ tenantId: uuid }).strict();
 const StationCreate = z
@@ -103,6 +107,13 @@ const StationCreate = z
       .optional(),
   })
   .strict();
+const EventQuery = z
+  .object({ limit: z.coerce.number().int().min(1).max(1000).default(200) })
+  .strict();
+const SessionQuery = PaginationQuery.extend({
+  station_id: uuid.optional(),
+  status: z.enum(['starting', 'active', 'completed', 'failed']).optional(),
+}).strict();
 const StationUpdate = z
   .object({
     vendor: z.string().trim().max(200).nullable().optional(),
@@ -624,6 +635,109 @@ export const ROUTES: RouteDefinition[] = [
   },
   {
     method: 'GET',
+    url: '/ingestion-rejections',
+    tenantSource: 'none',
+    capability: 'ingestion.read',
+    schema: { tags: ['ingestion'], querystring: EventQuery },
+    async handler({ client, request }) {
+      const query = EventQuery.parse(request.query);
+      const { rows } = await client.query(
+        `SELECT station_ref, reason_code, day, occurrence_count, first_seen_at, last_seen_at
+         FROM app.ingestion_rejections
+         ORDER BY day DESC, station_ref, reason_code LIMIT $1`,
+        [query.limit],
+      );
+      return { ingestion_rejections: rows };
+    },
+  },
+  {
+    method: 'GET',
+    url: '/sessions',
+    tenantSource: 'header',
+    capability: 'session.read',
+    schema: { tags: ['sessions'], querystring: SessionQuery },
+    async handler({ client, tenantId, request }) {
+      if (!tenantId) throw new AppError(400, 'TENANT_REQUIRED', 'X-Tenant-Id is required');
+      const query = SessionQuery.parse(request.query);
+      const after = query.cursor ? decodeCursor(query.cursor, 2) : undefined;
+      const values: unknown[] = [tenantId];
+      const filters = ['s.tenant_id = $1'];
+      if (query.station_id) {
+        values.push(query.station_id);
+        filters.push(`s.station_id = $${values.length}`);
+      }
+      if (query.status) {
+        values.push(query.status);
+        filters.push(`s.status = $${values.length}`);
+      }
+      if (after) {
+        values.push(after[0], after[1]);
+        filters.push(
+          `(s.started_at, s.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`,
+        );
+      }
+      values.push(query.limit + 1);
+      const { rows } = await client.query(
+        `SELECT s.id, s.tenant_id, s.site_id, s.station_id, s.connector_id,
+                s.csms_transaction_ref, s.id_tag, s.started_at, s.ended_at,
+                s.energy_wh, s.status, s.stop_reason, s.started_at_source,
+                s.ended_at_source, s.created_at, s.updated_at,
+                st.station_ref, c.connector_number
+         FROM app.sessions s
+         JOIN app.stations st ON st.id = s.station_id
+         JOIN app.connectors c ON c.id = s.connector_id
+         WHERE ${filters.join(' AND ')}
+         ORDER BY s.started_at DESC, s.id DESC LIMIT $${values.length}`,
+        values,
+      );
+      const masked = rows.map((row) => ({
+        ...row,
+        id_tag: maskIdTag((row as { id_tag: string | null }).id_tag),
+      }));
+      const pageResult = page(masked, query.limit, (row) => {
+        const startedAt = (row as { started_at: Date | string }).started_at;
+        return [
+          startedAt instanceof Date ? startedAt.toISOString() : String(startedAt),
+          String((row as { id: string }).id),
+        ];
+      });
+      return { sessions: pageResult.items, next_cursor: pageResult.nextCursor };
+    },
+  },
+  {
+    method: 'GET',
+    url: '/sessions/:id',
+    tenantSource: 'header',
+    capability: 'session.read',
+    schema: { tags: ['sessions'], params: IdParams },
+    isolation: { params: { id: '50000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      if (!tenantId) throw new AppError(400, 'TENANT_REQUIRED', 'X-Tenant-Id is required');
+      const params = IdParams.parse(request.params);
+      const session = await client.query(
+        `SELECT s.*, st.station_ref, c.connector_number
+         FROM app.sessions s
+         JOIN app.stations st ON st.id = s.station_id
+         JOIN app.connectors c ON c.id = s.connector_id
+         WHERE s.id = $1 AND s.tenant_id = $2`,
+        [params.id, tenantId],
+      );
+      const sessionRow = session.rows[0] as
+        (Record<string, unknown> & { id_tag?: string | null }) | undefined;
+      if (!sessionRow) throw new AppError(404, 'NOT_FOUND', 'session not found');
+      sessionRow.id_tag = maskIdTag(sessionRow.id_tag ?? null);
+      const meters = await client.query(
+        `SELECT id, csms_event_ref, csms_timestamp, charger_reported_at, energy_wh, power_w
+         FROM app.session_meter_values
+         WHERE session_id = $1 AND tenant_id = $2
+         ORDER BY csms_timestamp, id LIMIT 200`,
+        [params.id, tenantId],
+      );
+      return { session: sessionRow, meter_values: meters.rows };
+    },
+  },
+  {
+    method: 'GET',
     url: '/stations',
     tenantSource: 'header',
     capability: 'station.read',
@@ -636,7 +750,7 @@ export const ROUTES: RouteDefinition[] = [
         `SELECT s.id, s.tenant_id, s.site_id, s.station_ref, s.registration_status,
                 s.credentials_state, s.vendor, s.model, s.serial, s.firmware_version,
                 s.ocpp_version, s.created_at, s.updated_at,
-                r.connection_state, r.last_heartbeat_at, r.last_connected_at
+                r.connection_state, r.last_heartbeat_at, r.last_connected_at, r.last_seen_at
          FROM app.stations s
          LEFT JOIN app.station_runtime_state r ON r.station_id = s.id
          WHERE s.tenant_id = $1 ${after ? 'AND (s.station_ref, s.id) > ($2, $3)' : ''}
@@ -677,150 +791,193 @@ export const ROUTES: RouteDefinition[] = [
       if (!location.csms_location_id && body.latitude === undefined) {
         throw new AppError(400, 'LOCATION_REQUIRED', 'coordinates or a CSMS location are required');
       }
-      const inserted = await client.query<{ id: string }>(
-        `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref, vendor, model, serial,
+      const registrationLock = await db.pool.connect();
+      try {
+        if (!(await tryStationLock(registrationLock, body.station_ref))) {
+          void reply.code(409);
+          return {
+            error: {
+              code: 'REGISTRATION_IN_PROGRESS',
+              message: 'station registration is already in progress',
+            },
+          };
+        }
+        const inserted = await client.query<{ id: string }>(
+          `INSERT INTO app.stations (tenant_id, site_id, org_code, station_ref, vendor, model, serial,
            firmware_version, ocpp_version)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ocpp1.6') RETURNING id`,
-        [
+          [
+            tenantId,
+            body.site_id,
+            location.org_code,
+            body.station_ref,
+            body.vendor ?? null,
+            body.model ?? null,
+            body.serial ?? null,
+            body.firmware_version ?? null,
+          ],
+        );
+        const stationId = inserted.rows[0]!.id;
+        await client.query('COMMIT');
+        const registrationInput = {
+          stationId,
           tenantId,
-          body.site_id,
-          location.org_code,
-          body.station_ref,
-          body.vendor ?? null,
-          body.model ?? null,
-          body.serial ?? null,
-          body.firmware_version ?? null,
-        ],
-      );
-      const stationId = inserted.rows[0]!.id;
-      await client.query('COMMIT');
-      const registrationInput = {
-        stationId,
-        tenantId,
-        siteId: body.site_id,
-        stationRef: body.station_ref,
-        orgCode: location.org_code,
-        siteCode: location.site_code,
-        csmsLocationId: location.csms_location_id,
-        latitude: body.latitude,
-        longitude: body.longitude,
-        vendor: body.vendor,
-        model: body.model,
-        serial: body.serial,
-        firmwareVersion: body.firmware_version,
-        ocppVersion: 'ocpp1.6' as const,
-        connectors: body.connectors?.map((item) => ({
-          connectorNumber: item.connector_number,
-          type: item.type,
-          maxPowerW: item.max_power_w,
-        })),
-      };
-
-      let result;
-      try {
-        result = await adapter.registerStation(registrationInput);
-      } catch (error) {
-        const code = error instanceof CsmsError ? error.code : 'CSMS_REGISTRATION_FAILED';
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          await tx.query('SELECT app.mark_station_registration_failed($1, $2)', [stationId, code]);
-          await writeAudit(tx, principal, {
-            tenantId,
-            action: 'station.registration_failed',
-            resourceType: 'station',
-            resourceId: stationId,
-            requestId: request.id,
-            details: { code },
-          });
-        });
-        void reply.code(code === 'CSMS_CONFLICT' ? 409 : 502);
-        return {
-          error: { code, message: 'station registration failed' },
-          station: {
-            id: stationId,
-            station_ref: body.station_ref,
-            registration_status: 'registration_failed',
-          },
+          siteId: body.site_id,
+          stationRef: body.station_ref,
+          orgCode: location.org_code,
+          siteCode: location.site_code,
+          csmsLocationId: location.csms_location_id,
+          latitude: body.latitude,
+          longitude: body.longitude,
+          vendor: body.vendor,
+          model: body.model,
+          serial: body.serial,
+          firmwareVersion: body.firmware_version,
+          ocppVersion: 'ocpp1.6' as const,
+          connectors: body.connectors?.map((item) => ({
+            connectorNumber: item.connector_number,
+            type: item.type,
+            maxPowerW: item.max_power_w,
+          })),
         };
-      }
 
-      try {
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          if (result.csmsLocationId) {
-            await tx.query('SELECT app.set_site_csms_location($1, $2)', [
-              body.site_id,
-              result.csmsLocationId,
+        let result;
+        try {
+          result = await adapter.registerStation(registrationInput);
+        } catch (error) {
+          const code = error instanceof CsmsError ? error.code : 'CSMS_REGISTRATION_FAILED';
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            await tx.query('SELECT app.mark_station_registration_failed($1, $2)', [
+              stationId,
+              code,
             ]);
-          }
-          await tx.query('SELECT app.mark_station_registered($1, $2)', [
-            stationId,
-            result.csmsStationId,
-          ]);
-          await writeAudit(tx, principal, {
-            tenantId,
-            action: 'station.created',
-            resourceType: 'station',
-            resourceId: stationId,
-            requestId: request.id,
+            await writeAudit(tx, principal, {
+              tenantId,
+              action: 'station.registration_failed',
+              resourceType: 'station',
+              resourceId: stationId,
+              requestId: request.id,
+              details: { code },
+            });
           });
-        });
-      } catch {
-        void reply.code(503);
-        return {
-          error: {
-            code: 'REGISTRATION_STATE_RETRY',
-            message: 'registration succeeded but state could not be recorded; retry',
-            retryable: true,
-          },
-          station: { id: stationId, station_ref: body.station_ref, registration_status: 'pending' },
-        };
-      }
+          void reply.code(code === 'CSMS_CONFLICT' ? 409 : 502);
+          return {
+            error: { code, message: 'station registration failed' },
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'registration_failed',
+            },
+          };
+        }
 
-      try {
-        const credentials = await adapter.provisionPassword(body.station_ref);
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          await tx.query('SELECT app.mark_station_credentials_provisioned($1)', [stationId]);
-        });
-        void reply.code(201);
-        void reply.header('cache-control', 'no-store');
-        return {
-          station: {
-            id: stationId,
-            station_ref: body.station_ref,
-            registration_status: 'registered',
-          },
-          credentials: { username: body.station_ref, password: credentials },
-        };
-      } catch (error) {
-        const code = error instanceof CsmsError ? error.code : 'CSMS_CREDENTIAL_FAILED';
-        await db.transaction(async (tx) => {
-          await setActorContext(tx, principal.id);
-          await setTenantContext(tx, tenantId);
-          await tx.query('SELECT app.mark_station_rotation_incomplete($1)', [stationId]);
-          await writeAudit(tx, principal, {
-            tenantId,
-            action: 'station.credentials_rotation_failed',
-            resourceType: 'station',
-            resourceId: stationId,
-            requestId: request.id,
-            details: { code },
+        try {
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            if (result.csmsLocationId) {
+              await tx.query('SELECT app.set_site_csms_location($1, $2)', [
+                body.site_id,
+                result.csmsLocationId,
+              ]);
+            }
+            await tx.query('SELECT app.mark_station_registered($1, $2)', [
+              stationId,
+              result.csmsStationId,
+            ]);
+            const connectors = body.connectors?.length
+              ? body.connectors
+              : [{ connector_number: 1 }];
+            for (const connector of connectors) {
+              await tx.query(
+                `INSERT INTO app.connectors
+                 (tenant_id, site_id, station_id, connector_number, type, max_power_w)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (station_id, connector_number) DO NOTHING`,
+                [
+                  tenantId,
+                  body.site_id,
+                  stationId,
+                  connector.connector_number,
+                  connector.type ?? null,
+                  connector.max_power_w ?? null,
+                ],
+              );
+            }
+            await writeAudit(tx, principal, {
+              tenantId,
+              action: 'station.created',
+              resourceType: 'station',
+              resourceId: stationId,
+              requestId: request.id,
+            });
           });
-        });
-        void reply.code(502);
-        return {
-          error: { code, message: 'station registered but credential provisioning is incomplete' },
-          station: {
-            id: stationId,
-            station_ref: body.station_ref,
-            registration_status: 'registered',
-            credentials_state: 'rotation_incomplete',
-          },
-        };
+        } catch {
+          void reply.code(503);
+          return {
+            error: {
+              code: 'REGISTRATION_STATE_RETRY',
+              message: 'registration succeeded but state could not be recorded; retry',
+              retryable: true,
+            },
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'pending',
+            },
+          };
+        }
+
+        try {
+          const credentials = await adapter.provisionPassword(body.station_ref);
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            await tx.query('SELECT app.mark_station_credentials_provisioned($1)', [stationId]);
+          });
+          void reply.code(201);
+          void reply.header('cache-control', 'no-store');
+          return {
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'registered',
+            },
+            credentials: { username: body.station_ref, password: credentials },
+          };
+        } catch (error) {
+          const code = error instanceof CsmsError ? error.code : 'CSMS_CREDENTIAL_FAILED';
+          await db.transaction(async (tx) => {
+            await setActorContext(tx, principal.id);
+            await setTenantContext(tx, tenantId);
+            await tx.query('SELECT app.mark_station_rotation_incomplete($1)', [stationId]);
+            await writeAudit(tx, principal, {
+              tenantId,
+              action: 'station.credentials_rotation_failed',
+              resourceType: 'station',
+              resourceId: stationId,
+              requestId: request.id,
+              details: { code },
+            });
+          });
+          void reply.code(502);
+          return {
+            error: {
+              code,
+              message: 'station registered but credential provisioning is incomplete',
+            },
+            station: {
+              id: stationId,
+              station_ref: body.station_ref,
+              registration_status: 'registered',
+              credentials_state: 'rotation_incomplete',
+            },
+          };
+        }
+      } finally {
+        await releaseStationLock(registrationLock, body.station_ref);
       }
     },
   },
@@ -834,7 +991,7 @@ export const ROUTES: RouteDefinition[] = [
     async handler({ client, tenantId, request }) {
       const params = IdParams.parse(request.params);
       const { rows } = await client.query(
-        `SELECT s.*, r.connection_state, r.last_heartbeat_at, r.last_connected_at
+        `SELECT s.*, r.connection_state, r.last_heartbeat_at, r.last_connected_at, r.last_seen_at
          FROM app.stations s LEFT JOIN app.station_runtime_state r ON r.station_id = s.id
          WHERE s.id = $1 AND s.tenant_id = $2`,
         [params.id, tenantId],
@@ -870,6 +1027,60 @@ export const ROUTES: RouteDefinition[] = [
         requestId: request.id,
       });
       return rows[0];
+    },
+  },
+  {
+    method: 'GET',
+    url: '/stations/:id/status-events',
+    tenantSource: 'header',
+    capability: 'station.read',
+    schema: { tags: ['stations'], params: IdParams, querystring: EventQuery },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      const params = IdParams.parse(request.params);
+      const query = EventQuery.parse(request.query);
+      const station = await client.query(
+        'SELECT id FROM app.stations WHERE id = $1 AND tenant_id = $2',
+        [params.id, tenantId],
+      );
+      if (!station.rows[0]) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      const { rows } = await client.query(
+        `SELECT e.id, e.connector_id, c.connector_number, e.status, e.error_code,
+                e.csms_event_ref, e.csms_timestamp, e.charger_reported_at
+         FROM app.station_status_events e
+         LEFT JOIN app.connectors c ON c.id = e.connector_id
+         WHERE e.station_id = $1 AND e.tenant_id = $2
+         ORDER BY e.csms_timestamp DESC, e.id DESC LIMIT $3`,
+        [params.id, tenantId, query.limit],
+      );
+      return { status_events: rows };
+    },
+  },
+  {
+    method: 'GET',
+    url: '/stations/:id/ingestion-events',
+    tenantSource: 'header',
+    capability: 'station.read',
+    schema: { tags: ['stations'], params: IdParams, querystring: EventQuery },
+    isolation: { params: { id: '30000000-0000-4000-8000-000000000001' } },
+    async handler({ client, tenantId, request }) {
+      const params = IdParams.parse(request.params);
+      const query = EventQuery.parse(request.query);
+      const station = await client.query<{ station_ref: string }>(
+        'SELECT station_ref FROM app.stations WHERE id = $1 AND tenant_id = $2',
+        [params.id, tenantId],
+      );
+      const row = station.rows[0];
+      if (!row) throw new AppError(404, 'NOT_FOUND', 'station not found');
+      const { rows } = await client.query(
+        `SELECT id, station_ref, kind, csms_event_ref, csms_timestamp, outcome,
+                reason_code, occurrence_count
+         FROM app.ingestion_events
+         WHERE station_ref = $1 AND tenant_id = $2
+         ORDER BY csms_timestamp DESC, id DESC LIMIT $3`,
+        [row.station_ref, tenantId, query.limit],
+      );
+      return { ingestion_events: rows };
     },
   },
   {
@@ -1043,7 +1254,17 @@ export const ROUTES: RouteDefinition[] = [
         throw new AppError(409, 'STATION_NOT_RETRYABLE', 'station is not in a retryable state');
       }
       await client.query('COMMIT');
+      const registrationLock = await db.pool.connect();
       try {
+        if (!(await tryStationLock(registrationLock, row.station_ref))) {
+          void reply.code(409);
+          return {
+            error: {
+              code: 'REGISTRATION_IN_PROGRESS',
+              message: 'station registration is already in progress',
+            },
+          };
+        }
         const result = await adapter.registerStation({
           stationId: params.id,
           tenantId,
@@ -1115,6 +1336,8 @@ export const ROUTES: RouteDefinition[] = [
         });
         void reply.code(code === 'CSMS_CONFLICT' ? 409 : 502);
         return { error: { code, message: 'station registration retry failed' } };
+      } finally {
+        await releaseStationLock(registrationLock, row.station_ref);
       }
     },
   },

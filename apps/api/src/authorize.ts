@@ -22,7 +22,9 @@ export type Capability =
   | 'station.read'
   | 'station.create'
   | 'station.update'
-  | 'station.credentials.rotate';
+  | 'station.credentials.rotate'
+  | 'session.read'
+  | 'ingestion.read';
 
 export interface Resource {
   tenantId?: string;
@@ -48,7 +50,7 @@ export function authorize(
     return principal.id.length > 0;
   }
 
-  if (capability.startsWith('tenant.')) {
+  if (capability.startsWith('tenant.') || capability === 'ingestion.read') {
     return principal.isPlatformAdmin;
   }
 
@@ -66,6 +68,7 @@ export function authorize(
       if (role !== 'site_manager' || !resource.siteId) return false;
       return membershipFor(principal, tenantId)?.siteIds.includes(resource.siteId) === true;
     case 'station.read':
+    case 'session.read':
       return role !== null;
     case 'station.update':
       return role === 'tenant_admin' || role === 'platform_admin' || role === 'site_manager';

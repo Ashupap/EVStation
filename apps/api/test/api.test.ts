@@ -665,11 +665,21 @@ const MATRIX_ALLOW: Record<string, Array<keyof typeof MATRIX_ACTORS>> = {
   'POST /tenants': ['platform_admin'],
   'PATCH /tenants/:id': ['platform_admin'],
   'GET /sites': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /ingestion-rejections': ['platform_admin'],
+  'GET /sessions': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /sessions/:id': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
   'GET /stations': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
   'POST /stations': ['platform_admin', 'tenant_admin'],
   'GET /stations/:id': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
   'PATCH /stations/:id': ['platform_admin', 'tenant_admin', 'site_manager'],
   'GET /stations/:id/connectors': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /stations/:id/status-events': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /stations/:id/ingestion-events': [
+    'platform_admin',
+    'tenant_admin',
+    'site_manager',
+    'viewer',
+  ],
   'POST /stations/:id/credentials/rotate': ['platform_admin', 'tenant_admin'],
   'POST /stations/:id/register/retry': ['platform_admin', 'tenant_admin'],
   'POST /sites': ['platform_admin', 'tenant_admin'],
@@ -1482,6 +1492,11 @@ describe('station registration and credential rotation', () => {
       [body.station.id],
     );
     expect(runtime.rowCount).toBe(1);
+    const connectors = await db.superuser.query(
+      'SELECT connector_number FROM app.connectors WHERE station_id = $1',
+      [body.station.id],
+    );
+    expect(connectors.rows).toEqual([{ connector_number: 1 }]);
     const audit = await db.superuser.query(
       'SELECT action FROM app.audit_log WHERE resource_id = $1 ORDER BY id',
       [body.station.id],
@@ -1563,6 +1578,70 @@ describe('station registration and credential rotation', () => {
     expect(second.json().next_cursor).toBeNull();
   });
 
+  it('lists and reads sessions with tenant/site RLS and meter samples', async () => {
+    const stationId = '30000000-0000-4000-8000-000000000701';
+    const connectorId = '40000000-0000-4000-8000-000000000701';
+    const sessionId = '50000000-0000-4000-8000-000000000701';
+    await db.superuser.query(
+      `INSERT INTO app.stations (id, tenant_id, site_id, org_code, station_ref, registration_status)
+       VALUES ($1, $2, $3, 'ACME', 'ACME-BLR-701', 'registered')`,
+      [stationId, IDS.tenantA, IDS.siteA1],
+    );
+    await db.superuser.query(
+      `INSERT INTO app.connectors (id, tenant_id, site_id, station_id, connector_number)
+       VALUES ($1, $2, $3, $4, 1)`,
+      [connectorId, IDS.tenantA, IDS.siteA1, stationId],
+    );
+    await db.superuser.query(
+      `INSERT INTO app.sessions
+         (id, tenant_id, site_id, station_id, connector_id, csms_transaction_ref, id_tag,
+          started_at, status, meter_start_wh, energy_wh)
+       VALUES ($1, $2, $3, $4, $5, 'tx-701', 'TESTTAG', '2026-11-12T10:00:00Z', 'active', 0, 500)`,
+      [sessionId, IDS.tenantA, IDS.siteA1, stationId, connectorId],
+    );
+    await db.superuser.query(
+      `INSERT INTO app.session_meter_values
+         (tenant_id, site_id, station_id, session_id, csms_event_ref, csms_timestamp, energy_wh)
+       VALUES ($1, $2, $3, $4, 'meter-701:1', '2026-11-12T10:01:00Z', 500)`,
+      [IDS.tenantA, IDS.siteA1, stationId, sessionId],
+    );
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/sessions?limit=10&station_id=' + stationId,
+      headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().sessions).toHaveLength(1);
+    expect(list.json().sessions[0]).toMatchObject({
+      id: sessionId,
+      station_ref: 'ACME-BLR-701',
+      connector_number: 1,
+      id_tag: '****TTAG',
+    });
+    expect(list.json().next_cursor).toBeNull();
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/sessions/${sessionId}`,
+      headers: { ...auth('viewerA'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().session).toMatchObject({
+      csms_transaction_ref: 'tx-701',
+      id_tag: '****TTAG',
+    });
+    expect(detail.json().meter_values).toHaveLength(1);
+    expect(detail.json().meter_values[0]).toMatchObject({ energy_wh: '500' });
+
+    const otherTenant = await app.inject({
+      method: 'GET',
+      url: '/sessions',
+      headers: { ...auth('adminB'), 'x-tenant-id': IDS.tenantB },
+    });
+    expect(otherTenant.json().sessions).toEqual([]);
+  });
+
   it('retries registration for a failed station (tenant admin only)', async () => {
     const stationId = '30000000-0000-4000-8000-000000000099';
     await db.superuser.query(
@@ -1599,16 +1678,36 @@ describe('station registration and credential rotation', () => {
       },
     });
     const stationId = created.json().station.id as string;
-    const rotate = () =>
-      app.inject({
-        method: 'POST',
-        url: `/stations/${stationId}/credentials/rotate`,
-        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
-      });
-    const [a, b] = await Promise.all([rotate(), rotate()]);
-    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
-    const busy = a.statusCode === 409 ? a : b;
-    expect(busy.json().error.code).toBe('ROTATION_IN_PROGRESS');
+    const adapter = createFakeCsmsAdapter();
+    const originalRotate = adapter.rotatePassword.bind(adapter);
+    const delayed = adapter as CsmsAdapter & { rotatePassword: CsmsAdapter['rotatePassword'] };
+    delayed.rotatePassword = async (ref) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return originalRotate(ref);
+    };
+    const rotationApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: delayed,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const rotate = () =>
+        rotationApp.inject({
+          method: 'POST',
+          url: `/stations/${stationId}/credentials/rotate`,
+          headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        });
+      const [a, b] = await Promise.all([rotate(), rotate()]);
+      expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
+      const busy = a.statusCode === 409 ? a : b;
+      expect(busy.json().error.code).toBe('ROTATION_IN_PROGRESS');
+    } finally {
+      await rotationApp.close();
+    }
   });
 
   it('retries a pending state-recording failure and rejects decommissioned/provisioned states', async () => {
@@ -1665,6 +1764,46 @@ describe('station registration and credential rotation', () => {
       expect(response.json().error.code).toBe('ROTATION_IN_PROGRESS');
     } finally {
       await db.superuser.query('SELECT pg_advisory_unlock(hashtext($1))', [stationRef]);
+    }
+  });
+
+  it('takes the station lock for concurrent registration retries', async () => {
+    const stationId = '30000000-0000-4000-8000-000000000806';
+    await db.superuser.query(
+      `INSERT INTO app.stations (id, tenant_id, site_id, org_code, station_ref, registration_status)
+       VALUES ($1, $2, $3, 'ACME', 'ACME-BLR-806', 'pending')`,
+      [stationId, IDS.tenantA, IDS.siteA1],
+    );
+    const adapter = createFakeCsmsAdapter();
+    const original = adapter.registerStation.bind(adapter);
+    const failing = adapter as CsmsAdapter & {
+      registerStation: CsmsAdapter['registerStation'];
+    };
+    failing.registerStation = async (input) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return original(input);
+    };
+    const failingApp = await buildApp({
+      db: apiDb,
+      config,
+      verifier,
+      mailer,
+      adapter: failing,
+      rateLimit: { max: 10_000, timeWindow: 60_000 },
+      logger: false,
+    });
+    try {
+      const call = () =>
+        failingApp.inject({
+          method: 'POST',
+          url: `/stations/${stationId}/register/retry`,
+          headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+        });
+      const responses = await Promise.all([call(), call()]);
+      const codes = responses.map((response) => response.statusCode).sort();
+      expect(codes).toEqual([200, 409]);
+    } finally {
+      await failingApp.close();
     }
   });
 
