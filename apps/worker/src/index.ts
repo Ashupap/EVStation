@@ -13,6 +13,8 @@ let lastEventAt: string | null = null;
 let lastError: string | null = null;
 let stopping = false;
 let amqpConnected = false;
+let exitTimer: NodeJS.Timeout | null = null;
+const latencies: number[] = [];
 const counters = {
   received: 0,
   acked: 0,
@@ -41,6 +43,9 @@ async function queueDepth(): Promise<number | null> {
 const health = http.createServer(async (request, response) => {
   if (request.url === '/metrics') {
     const depth = await queueDepth();
+    const sorted = [...latencies].sort((a, b) => a - b);
+    const quantile = (q: number) =>
+      sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))] : NaN;
     response.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
     response.end(
       [
@@ -53,7 +58,13 @@ const health = http.createServer(async (request, response) => {
         `evstation_worker_events_errors_total ${counters.errors}`,
         '# HELP evstation_worker_consumer_lag Messages ready in the ingest queue.',
         '# TYPE evstation_worker_consumer_lag gauge',
-        `evstation_worker_consumer_lag ${depth ?? 0}`,
+        `evstation_worker_consumer_lag ${depth === null ? 'NaN' : depth}`,
+        `evstation_worker_queue_depth_available ${depth === null ? 0 : 1}`,
+        `evstation_worker_queue_depth_high ${depth !== null && depth > config.queueDepthAlertThreshold ? 1 : 0}`,
+        '# HELP evstation_worker_event_duration_ms Event handler latency.',
+        '# TYPE evstation_worker_event_duration_ms gauge',
+        `evstation_worker_event_duration_p50_ms ${quantile(0.5)}`,
+        `evstation_worker_event_duration_p95_ms ${quantile(0.95)}`,
         '',
       ].join('\n'),
     );
@@ -87,14 +98,21 @@ async function main(): Promise<void> {
         if (state === 'error' || (state === 'closed' && !stopping)) {
           lastError = error?.message ?? 'AMQP connection closed';
           console.error('worker_amqp_state', { state, error: lastError });
-          if (!stopping) process.exitCode = 1;
+          if (!stopping && exitTimer === null) {
+            process.exitCode = 1;
+            exitTimer = setTimeout(() => process.exit(1), 1_000);
+            exitTimer.unref();
+          }
         }
       },
     },
     async (event) => {
       counters.received += 1;
+      const started = performance.now();
       try {
         const result = await handleEvent(event, ingestPool, config.maxRetries);
+        latencies.push(performance.now() - started);
+        if (latencies.length > 10_000) latencies.shift();
         if (result === 'ack') counters.acked += 1;
         else counters.retried += 1;
         lastEventAt = new Date().toISOString();
@@ -102,6 +120,8 @@ async function main(): Promise<void> {
         return result;
       } catch (error) {
         counters.errors += 1;
+        latencies.push(performance.now() - started);
+        if (latencies.length > 10_000) latencies.shift();
         lastError = error instanceof Error ? error.message : String(error);
         console.error('worker_event_failed', { routingKey: event.routingKey, error: lastError });
         try {

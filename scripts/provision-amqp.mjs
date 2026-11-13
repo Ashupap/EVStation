@@ -12,7 +12,9 @@ for (const line of fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8').spl
 }
 
 const password = process.env.OUR_AMQP_WORKER_PASSWORD ?? vars.OUR_AMQP_WORKER_PASSWORD;
+const monitorPassword = process.env.OUR_AMQP_MONITOR_PASSWORD ?? vars.OUR_AMQP_MONITOR_PASSWORD;
 if (!password) throw new Error('OUR_AMQP_WORKER_PASSWORD missing in infra/compose/.env');
+if (!monitorPassword) throw new Error('OUR_AMQP_MONITOR_PASSWORD missing in infra/compose/.env');
 const base = process.env.RABBITMQ_MGMT_URL ?? 'http://127.0.0.1:15672/api';
 const auth = Buffer.from(
   `${process.env.RABBITMQ_ADMIN_USER ?? 'guest'}:${process.env.RABBITMQ_ADMIN_PASS ?? 'guest'}`,
@@ -37,6 +39,12 @@ await call('PUT', `/permissions/${vhost}/evstation_worker`, {
   write: '^$',
   read: '^evstation\\.ingest$',
 });
+await call('PUT', `/users/evstation_monitor`, { password: monitorPassword, tags: 'monitoring' });
+await call('PUT', `/permissions/${vhost}/evstation_monitor`, {
+  configure: '^$',
+  write: '^$',
+  read: '^evstation\\.ingest$',
+});
 await call('PUT', `/exchanges/${vhost}/messages`, {
   type: 'topic',
   durable: true,
@@ -56,8 +64,8 @@ await call('PUT', `/queues/${vhost}/evstation.ingest`, {
   auto_delete: false,
   arguments: {
     'x-dead-letter-exchange': 'evstation.ingest.dlx',
-    'x-max-length': 100000,
-    'x-overflow': 'drop-head',
+    'x-max-length-bytes': 5368709120,
+    'x-overflow': 'reject-publish',
   },
 });
 await call('PUT', `/queues/${vhost}/evstation.ingest.retry`, {

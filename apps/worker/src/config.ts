@@ -44,6 +44,7 @@ export interface WorkerConfig {
   amqpManagementUrl: string;
   rabbitmqUser: string;
   rabbitmqPassword: string;
+  queueDepthAlertThreshold: number;
 }
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
@@ -85,7 +86,9 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerCo
     idTagRetentionDays: number('ID_TAG_RETENTION_DAYS', 365),
     rejectionRetentionDays: number('INGESTION_REJECTION_RETENTION_DAYS', 30),
     amqpManagementUrl: merged.RABBITMQ_MGMT_URL ?? 'http://127.0.0.1:15672/api',
-    rabbitmqUser: merged.RABBITMQ_ADMIN_USER ?? 'guest',
-    rabbitmqPassword: merged.RABBITMQ_ADMIN_PASS ?? 'guest',
+    rabbitmqUser: merged.RABBITMQ_MONITOR_USER ?? 'evstation_monitor',
+    rabbitmqPassword:
+      merged.RABBITMQ_MONITOR_PASS ?? merged.OUR_AMQP_MONITOR_PASSWORD ?? 'unavailable',
+    queueDepthAlertThreshold: number('QUEUE_DEPTH_ALERT_THRESHOLD', 10000),
   };
 }

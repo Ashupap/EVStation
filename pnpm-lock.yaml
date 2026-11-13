@@ -11,6 +11,9 @@ importers:
       '@types/node':
         specifier: 26.6.5
         version: 26.6.5
+      amqplib:
+        specifier: 2.2.0
+        version: 2.2.0
       eslint:
         specifier: 10.14.0
         version: 10.14.0(jiti@2.7.0)

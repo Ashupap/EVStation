@@ -834,3 +834,50 @@ charger_reported_at)` because sample replay can arrive with a new envelope.
 - **Known limitation.** The same event ref with a different envelope timestamp
   is not deduplicated. This is intentional for the first ingestion slice;
   a body-hash fallback would require a separately indexed dedup store.
+
+### ADR-0027: Ingestion sharding plan for sustained rates above ~175 msg/s
+
+- **Context.** The round-2 benchmark (`docs/evidence/phase2b-throughput.log`)
+  published 12,000 mixed heartbeat/status/meter/start/stop messages over 60 s
+  (200 msg/s target) through the real worker and PostgreSQL. With
+  `prefetch(1)` and strictly sequential writes, p50 was 2.48 ms, p95 4.68 ms,
+  CPU was 17.6%, the post-publish drain took 9.19 s, and sustained throughput
+  was ~173 msg/s with a maximum sampled queue depth of 90. That is acceptable
+  for the pilot volume but below the 200 msg/s target.
+- **Decision.** Keep one ordered queue and `prefetch(1)` for correctness at the
+  pilot rate, but plan sharding before the 500-station/200 msg/s target:
+  1. Partition the ingest exchange by a stable station shard (`consistent_hash`
+     on `ocppConnectionName` if the RabbitMQ plugin is available; otherwise
+     application-side shard routing).
+  2. Run one worker consumer group per shard, each with its own ordered queue
+     and the same SECURITY DEFINER functions. Sessions never span shards, so
+     ordering is preserved per station.
+  3. Keep the single-writer-per-session invariant inside each shard; meter
+     and stop events stay ordered by station.
+  4. Add a shard-aware consumer-lag dashboard and per-shard queue-depth alerts.
+  5. Re-run this benchmark with 200 msg/s across at least four shards before
+     raising the target.
+- **Consequences.** No migration is needed for the pilot; the existing
+  `evstation.ingest` queue remains the single-shard implementation. The
+  sharding work is deferred until the load target requires it and is tracked
+  as a known limitation.
+
+## Known issues (Phase 2b round 2)
+
+1. Heartbeat-derived offline timeout is not implemented. The sweeper uses the
+   configured timeout only; RUNBOOK requires a charger's boot heartbeat
+   interval to be **<= timeout / 3** until interval tracking lands.
+2. There is no dedicated broker shutdown test. The serial-chain shutdown is
+   covered by unit ordering tests and the E2E drain/replay proof.
+3. There is no non-UTC jobs-path test. Job month boundaries are computed in
+   UTC, but a process-level TZ test is still missing.
+4. `0033` intentionally removed table-level `connectors` UPDATE from
+   `evstation_app`; station/event writes are worker-only. A future connector
+   PATCH route will need column-level UPDATE grants added deliberately.
+5. `session_meter_values.energy_wh` is the cumulative charger register;
+   `sessions.energy_wh` is relative to `meter_start_wh`. API consumers must not
+   compare the two directly.
+6. `GET /sessions/:id` returns at most 200 meter samples by design.
+7. `evstation_worker_events_parked_total` currently increments only for
+   handler-thrown `POISON` parking. `RETRY_EXHAUSTED` parking is in the ledger
+   but is counted as an ack, so the metric under-reports that path.

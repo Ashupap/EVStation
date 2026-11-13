@@ -72,3 +72,13 @@ Phase 2b write timings (EXPLAIN ANALYZE, local PostgreSQL 16, E2E fixture data)
  Execution Time: 14.241 ms
 (4 rows)
 
+
+ensure_event_partition with 1,000 rows in the default partition:
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=4) (actual time=45.826..45.827 rows=1 loops=1)
+   Buffers: shared hit=5119 dirtied=83
+ Planning Time: 0.049 ms
+ Execution Time: 45.879 ms
+(4 rows)
+

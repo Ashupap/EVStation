@@ -42,7 +42,8 @@
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",
-    "pg": "8.23.1"
+    "pg": "8.23.1",
+    "amqplib": "2.2.0"
   },
   "description": "EV charging Central Management System (CMS) for India, built on CitrineOS.",
   "repository": {

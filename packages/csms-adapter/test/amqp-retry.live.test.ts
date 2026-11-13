@@ -10,19 +10,38 @@ describe.skipIf(!enabled)('AMQP retry routing', () => {
     const channel = await connection.createChannel();
     const probe = `evstation.retry.probe.${Date.now()}`;
     const key = 'frame.inbound.Heartbeat';
+    const marker = `retry-${Date.now()}`;
+    let received: string | null = null;
     try {
       await channel.assertQueue(probe, { durable: false, autoDelete: true });
       await channel.bindQueue(probe, 'messages', key);
       await channel.purgeQueue(probe);
-      await channel.publish('evstation.ingest.dlx', key, Buffer.from('{"probe":true}'), {
+      await channel.prefetch(1);
+      await channel.consume(
+        'evstation.ingest',
+        (message) => {
+          if (!message) return;
+          const body = message.content.toString();
+          if (body.includes(marker)) {
+            received = body;
+            channel.ack(message);
+          } else {
+            channel.nack(message, false, true);
+          }
+        },
+        { noAck: false },
+      );
+      await channel.publish('evstation.ingest.dlx', key, Buffer.from(`{"marker":"${marker}"}`), {
         contentType: 'application/json',
         expiration: '30000',
       });
-      await new Promise((resolve) => setTimeout(resolve, 32_000));
+      const deadline = Date.now() + 34_000;
+      while (received === null && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
       const probeMessage = await channel.get(probe, { noAck: true });
-      const main = await channel.checkQueue('evstation.ingest');
+      expect(received).toContain(marker);
       expect(probeMessage).toBe(false);
-      expect(main.messageCount).toBeGreaterThanOrEqual(0);
     } finally {
       await channel.deleteQueue(probe).catch(() => undefined);
       await channel.close().catch(() => undefined);

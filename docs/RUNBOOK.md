@@ -308,7 +308,9 @@ offline sweeps, stale-session closure, idTag pseudonymization, monthly
 partition creation and retention drops on `WORKER_JOB_INTERVAL_MS` (default
 60 s). Tune `STALE_SESSION_SECONDS`, `STATION_OFFLINE_TIMEOUT_SECONDS`,
 `ID_TAG_RETENTION_DAYS`, `METER_RETENTION_DAYS`, `STATUS_EVENT_RETENTION_DAYS`
-and `INGESTION_LEDGER_RETENTION_DAYS` there.
+and `INGESTION_LEDGER_RETENTION_DAYS` there. The offline sweeper currently
+uses the configured timeout only; until heartbeat-interval tracking lands,
+commission chargers with a boot heartbeat interval **<= timeout / 3**.
 
 The 2b end-to-end smoke is:
 

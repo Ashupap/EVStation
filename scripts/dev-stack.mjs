@@ -112,6 +112,7 @@ function ensureEnv() {
     OUR_DB_INGEST_PASSWORD: secret(),
     OUR_DB_JOBS_PASSWORD: secret(),
     OUR_AMQP_WORKER_PASSWORD: secret(),
+    OUR_AMQP_MONITOR_PASSWORD: secret(),
     KC_BOOTSTRAP_ADMIN_USERNAME: 'dev_admin',
     KC_BOOTSTRAP_ADMIN_PASSWORD: secret(),
     KC_DASHBOARD_CLIENT_SECRET: secret(),

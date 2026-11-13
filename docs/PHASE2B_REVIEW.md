@@ -8,11 +8,11 @@ Status: implementation + review fixes complete locally; not yet merged.
 
 ## Evidence
 
-- Full test suite: `pnpm test` — 30 files passed, 2 skipped; 256 tests passed, 4 skipped.
+- Full test suite: `pnpm test` — 30 files passed, 2 skipped; 257 tests passed, 4 skipped.
 - Per-workspace counts from `pnpm vitest run <dir>`:
   - `packages/db/test`: 6 files, 98 passed
   - `apps/api/test`: 6 files, 76 passed
-  - `apps/worker/test`: 3 files, 9 passed
+  - `apps/worker/test`: 3 files, 10 passed
   - `packages/csms-adapter/test`: 5 passed + 2 skipped files; 13 passed + 4 skipped tests
   - `packages/shared/test`: 1 file, 1 passed
   - `apps/dashboard/test`: 9 files, 59 passed
@@ -98,5 +98,20 @@ Evidence: `docs/evidence/phase2b-review-red-first.log` (9 targeted tests failed 
 | 18  | Register/retry lock, pool concurrency, write timings, horizon+3, first-of-month drop | Partial: non-UTC jobs-path test not added         | `api.test.ts > station lock`, `phase2b-review.test.ts > first-of-month`, jobs horizon test |
 
 Current per-workspace counts after round 2: db 98, api 76, worker 9,
-csms-adapter 13 passed + 4 skipped, shared 1, dashboard 59; root 256 passed,
+csms-adapter 13 passed + 4 skipped, shared 1, dashboard 59; root 257 passed,
 4 skipped.
+
+## Round 3 merge-gate fixes
+
+| #   | Fix                                                                | Status                                                               | Evidence                                                        |
+| --- | ------------------------------------------------------------------ | -------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 1   | Remove depth-drop; use 5 GiB byte cap + reject-publish/depth alert | Done                                                                 | `evstation-ingest-definitions.json`, provision script, RUNBOOK  |
+| 2   | Monitoring-only RabbitMQ user; `queue_depth_available`, NaN not 0  | Done                                                                 | `evstation_monitor`, `/metrics`; benchmark reports available=1  |
+| 3   | Retry live test waits for the message on `evstation.ingest`        | Done                                                                 | `amqp-retry.live.test.ts`, smoke log                            |
+| 4   | AMQP close/error exits non-zero after 1 s                          | Done                                                                 | worker `onState` timer                                          |
+| 5   | Advisory unlock failure destroys connection                        | Done                                                                 | `jobs.test.ts > destroys connection`                            |
+| 6   | 200 msg/s × 60 s benchmark + timings + sharding ADR                | Partial: sustained ~173 msg/s, so ADR-0027 sharding plan is required | `phase2b-throughput.log`, `phase2b-write-timings.log`, ADR-0027 |
+
+Known issues are recorded in `docs/DECISIONS.md` (heartbeat-derived timeout,
+broker shutdown test, non-UTC jobs test, connectors UPDATE grants, energy
+semantics, 200-meter cap, parked metric scope).

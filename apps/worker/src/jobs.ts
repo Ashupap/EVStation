@@ -37,8 +37,11 @@ export async function withJobLock(
     await task(client);
     return true;
   } finally {
-    await client.query('SELECT pg_advisory_unlock($1)', [key]).catch(() => undefined);
-    client.release();
+    let unlocked = true;
+    await client.query('SELECT pg_advisory_unlock($1)', [key]).catch(() => {
+      unlocked = false;
+    });
+    client.release(!unlocked);
   }
 }
 

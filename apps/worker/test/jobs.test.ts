@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runJobs, withJobLock } from '../src/jobs.js';
 import type { WorkerConfig } from '../src/config.js';
 
@@ -26,6 +26,23 @@ function fakePool() {
 }
 
 describe('job advisory locks', () => {
+  it('destroys the connection when advisory unlock fails', async () => {
+    const release = vi.fn();
+    const pool = {
+      connect: async () =>
+        ({
+          query: async (sql: string) => {
+            if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
+            if (sql.includes('pg_advisory_unlock')) throw new Error('connection lost');
+            return { rows: [] };
+          },
+          release,
+        }) as unknown as PoolClient,
+    } as unknown as Pool;
+    await expect(withJobLock(pool, 9202, async () => undefined)).resolves.toBe(true);
+    expect(release).toHaveBeenCalledWith(true);
+  });
+
   it('creates the partition horizon through current+3 months', async () => {
     const months: string[] = [];
     const pool = {

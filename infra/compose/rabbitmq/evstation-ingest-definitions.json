@@ -18,8 +18,8 @@
       "auto_delete": false,
       "arguments": {
         "x-dead-letter-exchange": "evstation.ingest.dlx",
-        "x-max-length": 100000,
-        "x-overflow": "drop-head"
+        "x-max-length-bytes": 5368709120,
+        "x-overflow": "reject-publish"
       }
     },
     {
