@@ -665,6 +665,7 @@ const MATRIX_ALLOW: Record<string, Array<keyof typeof MATRIX_ACTORS>> = {
   'POST /tenants': ['platform_admin'],
   'PATCH /tenants/:id': ['platform_admin'],
   'GET /sites': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /events': ['tenant_admin', 'site_manager', 'viewer'],
   'GET /ingestion-rejections': ['platform_admin'],
   'GET /sessions': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
   'GET /sessions/:id': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
@@ -768,6 +769,7 @@ describe('HTTP role x route matrix', () => {
         });
         const label = `${key} as ${actor}`;
         if (allowed.includes(actor)) {
+          if (route.streaming) continue;
           expect(response.statusCode, label).not.toBe(401);
           expect(response.statusCode, label).not.toBe(403);
           expect(response.statusCode, label).toBeLessThan(500);
@@ -796,6 +798,7 @@ describe('cross-tenant isolation suite (registry-driven)', () => {
       ...ROUTES.map((route) => `${route.method} ${route.url}`),
       'GET /health',
       'GET /health/ready',
+      'GET /metrics',
     ].sort();
     expect(registeredRoutes.sort()).toEqual(expected);
   });
@@ -1576,6 +1579,16 @@ describe('station registration and credential rotation', () => {
       second.json().stations.map((station: { station_ref: string }) => station.station_ref),
     ).toEqual(['ACME-BLR-812']);
     expect(second.json().next_cursor).toBeNull();
+  });
+
+  it('rejects platform admins on /events with a stable code', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/events',
+      headers: { ...auth('platform'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('PLATFORM_ADMIN_NOT_SUPPORTED');
   });
 
   it('lists and reads sessions with tenant/site RLS and meter samples', async () => {

@@ -18,6 +18,7 @@ import { authenticate, type TokenVerifier } from './auth.js';
 import type { ApiConfig } from './config.js';
 import { setActorContext } from './context.js';
 import type { ApiDb } from './db.js';
+import { SseHub } from './sse.js';
 import { AppError, errorHandler, toErrorBody } from './errors.js';
 import { MemoryMailer, type Mailer } from './mailer.js';
 import { loadPrincipal, resolveTenant, type Principal } from './principal.js';
@@ -44,6 +45,7 @@ export interface BuildAppOptions {
   logger?: boolean;
   logStream?: NodeJS.WritableStream;
   onRoute?: (route: RegisteredRoute) => void;
+  sse?: SseHub;
 }
 
 export const SERVICE_NAME = 'evstation-api';
@@ -53,6 +55,7 @@ function isPublicPath(pathname: string): boolean {
   return (
     pathname === '/health' ||
     pathname === '/health/ready' ||
+    pathname === '/metrics' ||
     pathname === '/openapi.json' ||
     pathname === '/docs' ||
     pathname.startsWith('/docs/')
@@ -63,6 +66,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const { db, config, verifier } = options;
   const mailer = options.mailer ?? new MemoryMailer();
   const adapter = options.adapter ?? createFakeCsmsAdapter();
+  const sse = options.sse ?? new SseHub(db, config);
   if (config.nodeEnv === 'production' && !options.mailer) {
     throw new Error('a mailer is required in production');
   }
@@ -124,6 +128,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     done();
   });
 
+  await sse.start();
+  app.addHook('onClose', async () => sse.close());
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.setErrorHandler(errorHandler);
@@ -179,6 +185,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   app.get('/health', async () => ({ status: 'ok', service: SERVICE_NAME }));
+  app.get('/metrics', async () => {
+    const usage = await db.query<{ usage: string }>(
+      'SELECT pg_notification_queue_usage()::text AS usage',
+    );
+    const notificationQueueUsage = Number(usage.rows[0]?.usage ?? 0);
+    return {
+      ...sse.snapshot(),
+      notification_queue_usage: notificationQueueUsage,
+      notification_queue_usage_high: notificationQueueUsage > 0.5,
+    };
+  });
   app.get('/health/ready', async () => {
     await db.query('SELECT 1');
     return { status: 'ready', service: SERVICE_NAME };
@@ -193,6 +210,43 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (!claims) throw new AppError(401, 'UNAUTHORIZED', 'missing bearer token');
     const requestedTenantId = tenantForRequest(definition, request);
     let principal: Principal | undefined;
+    if (definition.streaming) {
+      const scope = await db.transaction(async (client) => {
+        await setActorContext(client, claims.sub);
+        principal = await loadPrincipal(client, claims);
+        const tenantId = await resolveTenant(
+          client,
+          principal,
+          requestedTenantId,
+          definition.tenantSource !== 'none',
+        );
+        requireCapability(principal, tenantId, definition.capability);
+        if (principal.isPlatformAdmin) {
+          throw new AppError(
+            403,
+            'PLATFORM_ADMIN_NOT_SUPPORTED',
+            'platform admin is not supported',
+          );
+        }
+        const membership = principal.memberships.find((item) => item.tenantId === tenantId);
+        if (!membership || !tenantId) throw new AppError(403, 'TENANT_REQUIRED', 'tenant required');
+        return {
+          actorId: principal.id,
+          email: principal.email,
+          tenantId,
+          role: membership.role,
+          siteIds: membership.siteIds,
+          tokenExpiresAt: typeof claims.exp === 'number' ? claims.exp * 1000 : null,
+        };
+      });
+      try {
+        await sse.open(scope, request, reply);
+      } catch (error) {
+        request.log.error({ err: error }, 'sse open failed');
+        throw error;
+      }
+      return undefined;
+    }
     const afterCommitTasks: Array<() => Promise<void>> = [];
 
     try {
