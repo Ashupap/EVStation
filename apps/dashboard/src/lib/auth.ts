@@ -97,7 +97,9 @@ export function refreshSession(
   return tracked;
 }
 
-async function getSession(): Promise<{ sessionId: string; session: SessionRecord } | undefined> {
+export async function getServerSession(): Promise<
+  { sessionId: string; session: SessionRecord } | undefined
+> {
   const config = loadDashboardConfig();
   const sessionId = await readSessionCookie(config);
   if (!sessionId) return undefined;
@@ -121,7 +123,7 @@ export type AuthState =
   { kind: 'ok'; auth: AuthContext } | { kind: 'anonymous' } | { kind: 'unavailable' };
 
 export const getAuthState = cache(async (): Promise<AuthState> => {
-  const current = await getSession();
+  const current = await getServerSession();
   if (!current) return { kind: 'anonymous' };
   const incomingHeaders = await headers();
   const response = await apiFetch(
