@@ -33,6 +33,8 @@ pnpm test:e2e:phase2b
 AMQP_LIVE_TEST=1 pnpm vitest run packages/csms-adapter/test/amqp-retry.live.test.ts
 ```
 
-Manual check completed for this acceptance record: the dashboard `returnTo`
-open-redirect check (`/auth/login?returnTo=//evil.example`) stays on the
-dashboard origin. Automated `safeReturnTo`/Playwright tests remain primary.
+One-off browser-level check: the automated Chromium case
+`never redirects a malicious returnTo off the dashboard origin`
+(`apps/dashboard/test/e2e/dashboard.spec.ts`) passes against the built
+dashboard; a separate human-driven browser session was not recorded. Automated
+`safeReturnTo`/Playwright coverage remains primary.
