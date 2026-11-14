@@ -2,6 +2,7 @@ import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import { createFakeCsmsAdapter, type CsmsAdapter } from '@evstation/csms-adapter';
 import swaggerUi from '@fastify/swagger-ui';
+import { timingSafeEqual } from 'node:crypto';
 import Fastify, {
   LogController,
   type FastifyInstance,
@@ -185,7 +186,17 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   app.get('/health', async () => ({ status: 'ok', service: SERVICE_NAME }));
-  app.get('/metrics', async () => {
+  app.get('/metrics', async (request, reply) => {
+    const expected = process.env.METRICS_TOKEN;
+    const supplied = request.headers.authorization?.replace(/^Bearer\s+/u, '') ?? '';
+    const valid =
+      expected &&
+      supplied.length === expected.length &&
+      timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
+    if (!valid) {
+      void reply.code(401);
+      return { error: { code: 'UNAUTHORIZED', message: 'metrics token required' } };
+    }
     const usage = await db.query<{ usage: string }>(
       'SELECT pg_notification_queue_usage()::text AS usage',
     );

@@ -352,7 +352,7 @@ worker to finish the session, meter samples and boot fields.
 ## SSE operations
 
 `GET /api/events` is the dashboard BFF stream; the API owns `GET /events`.
-Metrics are exposed by the API `/metrics` endpoint:
+Metrics are exposed by the API `/metrics` endpoint and require `Authorization: Bearer $METRICS_TOKEN` (constant-time compare; unset/disabled returns 401):
 `sse_connections`, `events_notified`, `events_dropped_not_visible`,
 `reread_p50_ms`, `reread_p95_ms`, `resyncs`, `backpressure_closes`, and
 `notification_queue_usage`.

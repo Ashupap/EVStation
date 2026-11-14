@@ -67,6 +67,17 @@ describe('SSE refresh classifier', () => {
     await transientHub.refresh(transient);
     expect(transient.closed).toBe(true);
     expect(transientRaw.chunks.join('')).toContain('scope_refresh_failed');
+
+    const unknownRaw = new Sink();
+    const unknown = connection(unknownRaw);
+    const unknownHub = hub(new Error('other')) as unknown as {
+      refresh: (c: unknown) => Promise<void>;
+    };
+    await unknownHub.refresh(unknown);
+    expect(unknown.closed).toBe(false);
+    await unknownHub.refresh(unknown);
+    await unknownHub.refresh(unknown);
+    expect(unknown.closed).toBe(true);
   });
 });
 

@@ -111,6 +111,8 @@ export function classifyRefreshError(error: unknown): 'access_denied' | 'transie
       ? String((error as { code?: unknown }).code)
       : '';
   if (['42501', '28000', '28P01', 'P0001'].includes(code)) return 'access_denied';
+  const message = error instanceof Error ? error.message : '';
+  if (/timeout|timed out/i.test(message)) return 'transient';
   if (
     [
       'ECONNRESET',
@@ -638,7 +640,7 @@ export class SseHub {
         return;
       }
       connection.refreshFailures += 1;
-      if (kind === 'unknown' || connection.refreshFailures >= this.maxRefreshFailures) {
+      if (connection.refreshFailures >= this.maxRefreshFailures) {
         this.closeConnection(connection, 'scope_refresh_failed');
       }
     }

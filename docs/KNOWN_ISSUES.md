@@ -22,3 +22,5 @@ deployment; owner phase is the phase expected to close it.
 | Low      | 2c    | SSE Last-Event-ID has no replay                                                                   | Send `resync`; client refetches after reconnect                             |
 | Low      | 2b    | No non-UTC jobs-path test                                                                         | Jobs use UTC month boundaries; add process-TZ test                          |
 | Low      | 2b    | `gitleaks` report must be produced before Phase 2c PR                                             | Run full-history gitleaks and attach report                                 |
+
+| Low | 2c | EventSource hook does not yet map BFF 401 to a dedicated session-expired UI | Stream closes and page/auth state must be refreshed; hook-level messaging deferred |

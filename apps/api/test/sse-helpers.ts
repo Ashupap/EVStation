@@ -79,6 +79,10 @@ export class SseStream {
     }
   }
 
+  count(name: string): number {
+    return this.frames.filter((frame) => frame.name === name).length;
+  }
+
   async waitForClose(timeoutMs: number): Promise<SseFrame> {
     return this.waitForEvent('closed', timeoutMs);
   }

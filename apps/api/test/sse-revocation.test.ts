@@ -265,8 +265,9 @@ describe('SSE revocation', () => {
     try {
       await status(STATION_A, 1, 21);
       await healthy.waitForEvent('station.status', 1_000);
-      const closed = await outOfScope.waitForClose(800).catch(() => null);
-      expect(closed).toBeNull();
+      await status(STATION_B, 1, 22);
+      await healthy.waitForEvent('station.status', 1_000);
+      expect(outOfScope.count('station.status')).toBe(0);
     } finally {
       await db.superuser.query(
         'UPDATE app.membership_sites SET site_id=$3 WHERE membership_id=(SELECT id FROM app.memberships WHERE user_id=$1 AND tenant_id=$2)',
@@ -285,6 +286,14 @@ describe('SSE revocation', () => {
       expect(JSON.parse(closed.data).reason).toBe('membership_removed');
     } finally {
       await viewer.close();
+      await db.superuser.query(
+        `INSERT INTO app.users (id,email,email_verified) VALUES ($1,'viewer@acme.example',true) ON CONFLICT DO NOTHING`,
+        [SEED_IDS.acmeViewer],
+      );
+      await db.superuser.query(
+        `INSERT INTO app.memberships (id,tenant_id,user_id,role) VALUES ('f2546dd4-aa5c-4aac-af1e-eab0f3acf5e0',$1,$2,'viewer') ON CONFLICT DO NOTHING`,
+        [SEED_IDS.acmeTenant, SEED_IDS.acmeViewer],
+      );
     }
   }, 10_000);
 
