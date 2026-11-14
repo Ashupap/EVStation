@@ -146,6 +146,7 @@ export interface RouteDefinition {
   capability: Capability;
   auditAction?: string;
   handler: (ctx: RouteContext) => Promise<unknown>;
+  streaming?: boolean;
   schema?: Record<string, unknown>;
   isolation?: { body?: Record<string, unknown>; params?: Record<string, string> };
   config?: Record<string, unknown>;
@@ -630,6 +631,17 @@ export const ROUTES: RouteDefinition[] = [
         requestId: request.id,
       });
       void reply.code(204);
+      return undefined;
+    },
+  },
+  {
+    method: 'GET',
+    url: '/events',
+    tenantSource: 'header',
+    capability: 'station.read',
+    streaming: true,
+    schema: { tags: ['events'] },
+    async handler() {
       return undefined;
     },
   },

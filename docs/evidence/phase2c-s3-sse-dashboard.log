@@ -1,0 +1,21 @@
+{
+  "via": "node reverse proxy -> Next dev",
+  "status": 200,
+  "content_type": "text/event-stream",
+  "cache_control": "no-cache, no-transform",
+  "x_accel_buffering": "no",
+  "chunks": [
+    {
+      "ms": 898,
+      "text": "id: 0\nevent: tick\ndata: {\"index\":0}\n\n"
+    },
+    {
+      "ms": 1394,
+      "text": "id: 1\nevent: tick\ndata: {\"index\":1}\n\n"
+    },
+    {
+      "ms": 1905,
+      "text": "id: 2\nevent: tick\ndata: {\"index\":2}\n\nevent: closed\ndata: {\"reason\":\"spike\"}\n\n"
+    }
+  ]
+}

@@ -665,6 +665,7 @@ const MATRIX_ALLOW: Record<string, Array<keyof typeof MATRIX_ACTORS>> = {
   'POST /tenants': ['platform_admin'],
   'PATCH /tenants/:id': ['platform_admin'],
   'GET /sites': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
+  'GET /events': ['tenant_admin', 'site_manager', 'viewer'],
   'GET /ingestion-rejections': ['platform_admin'],
   'GET /sessions': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
   'GET /sessions/:id': ['platform_admin', 'tenant_admin', 'site_manager', 'viewer'],
@@ -760,6 +761,7 @@ describe('HTTP role x route matrix', () => {
         [keyof typeof MATRIX_ACTORS, string]
       >) {
         const body = matrixBody(key, actor);
+        if (route.streaming && allowed.includes(actor)) continue;
         const response = await app.inject({
           method: route.method,
           url: matrixUrl(key),
@@ -796,6 +798,7 @@ describe('cross-tenant isolation suite (registry-driven)', () => {
       ...ROUTES.map((route) => `${route.method} ${route.url}`),
       'GET /health',
       'GET /health/ready',
+      'GET /metrics',
     ].sort();
     expect(registeredRoutes.sort()).toEqual(expected);
   });
@@ -1576,6 +1579,66 @@ describe('station registration and credential rotation', () => {
       second.json().stations.map((station: { station_ref: string }) => station.station_ref),
     ).toEqual(['ACME-BLR-812']);
     expect(second.json().next_cursor).toBeNull();
+  });
+
+  it('disables /events with SSE_ENABLED=false while enabled returns auth checks', async () => {
+    const previous = process.env.SSE_ENABLED;
+    process.env.SSE_ENABLED = 'false';
+    try {
+      const disabled = await app.inject({
+        method: 'GET',
+        url: '/events',
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      });
+      expect(disabled.statusCode).toBe(503);
+      expect(disabled.json().error.code).toBe('SSE_DISABLED');
+    } finally {
+      if (previous === undefined) delete process.env.SSE_ENABLED;
+      else process.env.SSE_ENABLED = previous;
+    }
+    const enabled = await app.inject({
+      method: 'GET',
+      url: '/events',
+      headers: { ...auth('platform'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(enabled.statusCode).toBe(403);
+    expect(enabled.json().error.code).toBe('PLATFORM_ADMIN_NOT_SUPPORTED');
+  });
+
+  it('protects /metrics with a constant-time bearer token', async () => {
+    const previous = process.env.METRICS_TOKEN;
+    process.env.METRICS_TOKEN = 'metrics-secret';
+    try {
+      expect((await app.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url: '/metrics',
+            headers: { authorization: 'Bearer wrong' },
+          })
+        ).statusCode,
+      ).toBe(401);
+      const ok = await app.inject({
+        method: 'GET',
+        url: '/metrics',
+        headers: { authorization: 'Bearer metrics-secret' },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toHaveProperty('sse_connections');
+    } finally {
+      process.env.METRICS_TOKEN = previous;
+    }
+  });
+
+  it('rejects platform admins on /events with a stable code', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/events',
+      headers: { ...auth('platform'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('PLATFORM_ADMIN_NOT_SUPPORTED');
   });
 
   it('lists and reads sessions with tenant/site RLS and meter samples', async () => {

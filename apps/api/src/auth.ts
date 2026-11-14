@@ -11,6 +11,7 @@ export interface TokenClaims {
   sub: string;
   email: string;
   email_verified: boolean;
+  exp?: number;
   name?: string;
   preferred_username?: string;
 }
@@ -56,6 +57,7 @@ export function createJwtVerifier(options: JwtVerifierOptions): TokenVerifier {
         sub: payload.sub,
         email: payload.email,
         email_verified: asBoolean(payload.email_verified),
+        ...(typeof payload.exp === 'number' ? { exp: payload.exp } : {}),
         ...(typeof payload.name === 'string' ? { name: payload.name } : {}),
         ...(typeof payload.preferred_username === 'string'
           ? { preferred_username: payload.preferred_username }

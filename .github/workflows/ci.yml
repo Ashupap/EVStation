@@ -10,6 +10,8 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-24.04
+    env:
+      METRICS_TOKEN: test-metrics-token
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

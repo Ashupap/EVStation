@@ -1,0 +1,231 @@
+=== close_stale_sessions ===
+--- 0033/close_stale_sessions
++++ 0034/close_stale_sessions
+@@ -3,17 +3,23 @@
+ SET search_path = pg_catalog, app, pg_temp AS $fn$
+ DECLARE n integer;
+ BEGIN
+-  UPDATE app.sessions s
+-  SET status='failed', stop_reason='STALE_SESSION_CLOSED', ended_at=now(), ended_at_source='csms', updated_at=now()
+-  WHERE s.status IN ('starting','active')
+-    AND NOT EXISTS (
+-      SELECT 1 FROM app.station_runtime_state r
+-      WHERE r.station_id = s.station_id AND r.connection_state = 'connected'
+-    )
+-    AND greatest(
+-      s.started_at,
+-      coalesce((SELECT max(m.csms_timestamp) FROM app.session_meter_values m WHERE m.session_id=s.id), s.started_at)
+-    ) < now() - make_interval(secs => p_stale_seconds);
+-  GET DIAGNOSTICS n = ROW_COUNT;
++  WITH closed AS (
++    UPDATE app.sessions s
++    SET status='failed', stop_reason='STALE_SESSION_CLOSED', ended_at=now(), ended_at_source='csms', updated_at=now()
++    WHERE s.status IN ('starting','active')
++      AND NOT EXISTS (
++        SELECT 1 FROM app.station_runtime_state r
++        WHERE r.station_id = s.station_id AND r.connection_state = 'connected'
++      )
++      AND greatest(
++        s.started_at,
++        coalesce((SELECT max(m.csms_timestamp) FROM app.session_meter_values m WHERE m.session_id=s.id), s.started_at)
++      ) < now() - make_interval(secs => p_stale_seconds)
++    RETURNING tenant_id, site_id, station_id, id, updated_at
++  )
++  SELECT count(*) INTO n FROM (
++    SELECT app.notify_event('session.ended', tenant_id, site_id, station_id, id, updated_at)
++    FROM closed
++  ) notified;
+   RETURN n;
+ END $fn$;
+
+=== expire_pending_starts ===
+--- 0033/expire_pending_starts
++++ 0034/expire_pending_starts
+@@ -17,7 +17,11 @@
+     FROM deleted d JOIN app.stations st ON st.id = d.station_id
+     ON CONFLICT (station_ref, csms_event_ref, csms_timestamp, outcome) DO NOTHING
+     RETURNING 1
++  ), notified AS (
++    SELECT app.notify_event('session.updated', d.tenant_id, d.site_id, d.station_id,
++      NULL, d.csms_timestamp)
++    FROM deleted d
+   )
+-  SELECT count(*) INTO n FROM deleted;
++  SELECT count(*) INTO n FROM notified;
+   RETURN n;
+ END $fn$;
+
+=== ingest_connection ===
+--- 0033/ingest_connection
++++ 0034/ingest_connection
+@@ -5,7 +5,7 @@
+ LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, app, pg_temp
+ AS $fn$
+-DECLARE s record;
++DECLARE s record; v_prev text;
+ BEGIN
+   SELECT * INTO s FROM app.ingest_station(p_station_ref);
+   IF NOT FOUND THEN RETURN app.reject_ingest_event(p_station_ref, 'UNKNOWN_STATION', p_payload_hash); END IF;
+@@ -13,6 +13,7 @@
+   IF p_state NOT IN ('connected', 'closed') THEN
+     RETURN app.reject_ingest_event(p_station_ref, 'MALFORMED_PAYLOAD', p_payload_hash);
+   END IF;
++  SELECT connection_state INTO v_prev FROM app.station_runtime_state WHERE station_id = s.id;
+   PERFORM app.touch_station_liveness(s.id, p_csms_timestamp, p_state = 'connected');
+   UPDATE app.station_runtime_state
+   SET connection_state = CASE WHEN p_state = 'connected' THEN 'connected' ELSE 'disconnected' END,
+@@ -21,6 +22,9 @@
+       updated_at = now()
+   WHERE station_id = s.id
+     AND (last_event_csms_at IS NULL OR p_csms_timestamp >= last_event_csms_at);
++  IF v_prev IS DISTINCT FROM (CASE WHEN p_state = 'connected' THEN 'connected' ELSE 'disconnected' END) AND FOUND THEN
++    PERFORM app.notify_event('station.connection', s.tenant_id, s.site_id, s.id, NULL, p_csms_timestamp);
++  END IF;
+   INSERT INTO app.ingestion_events
+     (station_ref, tenant_id, site_id, kind, csms_event_ref, csms_timestamp, outcome, reason_code, payload_hash)
+   VALUES (p_station_ref, s.tenant_id, s.site_id, 'connection', p_event_ref, p_csms_timestamp, 'accepted', NULL, p_payload_hash)
+
+=== ingest_meter_values ===
+--- 0033/ingest_meter_values
++++ 0034/ingest_meter_values
+@@ -5,7 +5,7 @@
+ LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, app, pg_temp
+ AS $fn$
+-DECLARE s record; sess record; sample jsonb; idx integer := 0; v_energy bigint; v_max_energy bigint; v_power integer;
++DECLARE s record; sess record; sample jsonb; idx integer := 0; v_energy bigint; v_max_energy bigint; v_power integer; v_notify boolean := false;
+ BEGIN
+   SELECT * INTO s FROM app.ingest_station(p_station_ref);
+   IF NOT FOUND THEN RETURN app.reject_ingest_event(p_station_ref, 'UNKNOWN_STATION', p_payload_hash); END IF;
+@@ -34,8 +34,18 @@
+   IF v_max_energy IS NOT NULL THEN
+     UPDATE app.sessions
+     SET energy_wh = greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)),
++        last_meter_notify_at = CASE
++          WHEN (last_meter_notify_at IS NULL OR
++                last_meter_notify_at <= p_csms_timestamp - make_interval(secs => 5))
++           AND greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)) IS DISTINCT FROM energy_wh
++          THEN p_csms_timestamp ELSE last_meter_notify_at END,
+         updated_at = now()
+-    WHERE id = sess.id;
++    WHERE id = sess.id
++    RETURNING (last_meter_notify_at = p_csms_timestamp) INTO v_notify;
++    IF v_notify THEN
++      PERFORM app.notify_event('session.meter', sess.tenant_id, sess.site_id,
++        sess.station_id, sess.id, p_csms_timestamp);
++    END IF;
+   END IF;
+   RETURN 'accepted';
+ END
+
+=== ingest_status ===
+--- 0033/ingest_status
++++ 0034/ingest_status
+@@ -24,6 +24,9 @@
+         WHEN 'Reserved' THEN 'reserved' WHEN 'Unavailable' THEN 'unavailable' ELSE 'faulted' END,
+       left(p_error_code, 64), p_event_ref, p_csms_timestamp, p_charger_timestamp)
+     ON CONFLICT (station_id, csms_event_ref, csms_timestamp) DO NOTHING;
++    IF FOUND THEN
++      PERFORM app.notify_event('station.status', s.tenant_id, s.site_id, s.id, NULL, p_csms_timestamp);
++    END IF;
+     RETURN 'accepted';
+   END IF;
+   SELECT * INTO c FROM app.connectors WHERE station_id = s.id AND connector_number = p_connector_number;
+@@ -42,6 +45,9 @@
+       WHEN 'Reserved' THEN 'reserved' WHEN 'Unavailable' THEN 'unavailable' ELSE 'faulted' END,
+     left(p_error_code, 64), p_event_ref, p_csms_timestamp, p_charger_timestamp)
+   ON CONFLICT (station_id, csms_event_ref, csms_timestamp) DO NOTHING;
++  IF FOUND THEN
++    PERFORM app.notify_event('station.status', s.tenant_id, s.site_id, s.id, NULL, p_csms_timestamp);
++  END IF;
+   RETURN 'accepted';
+ END
+ $fn$;
+
+=== ingest_transaction_start_response ===
+--- 0033/ingest_transaction_start_response
++++ 0034/ingest_transaction_start_response
+@@ -5,7 +5,7 @@
+ LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, app, pg_temp
+ AS $fn$
+-DECLARE s record; p record; v_existing record; v_status text;
++DECLARE s record; p record; v_existing record; v_status text; v_new_id uuid; v_old_id uuid;
+ BEGIN
+   SELECT * INTO s FROM app.ingest_station(p_station_ref);
+   IF NOT FOUND THEN RETURN app.reject_ingest_event(p_station_ref, 'UNKNOWN_STATION', p_payload_hash); END IF;
+@@ -30,10 +30,16 @@
+   END IF;
+   v_status := CASE WHEN p_id_tag_status = 'Accepted' THEN 'active' ELSE 'failed' END;
+   IF v_status = 'active' THEN
+-    UPDATE app.sessions
+-    SET status = 'failed', stop_reason = 'superseded', ended_at = p.started_at,
+-        ended_at_source = 'csms', updated_at = now()
+-    WHERE connector_id = p.connector_id AND status IN ('starting', 'active');
++    FOR v_old_id IN
++      UPDATE app.sessions
++      SET status = 'failed', stop_reason = 'superseded', ended_at = p.started_at,
++          ended_at_source = 'csms', updated_at = now()
++      WHERE connector_id = p.connector_id AND status IN ('starting', 'active')
++      RETURNING id
++    LOOP
++      PERFORM app.notify_event('session.updated', p.tenant_id, p.site_id, p.station_id,
++        v_old_id, p_csms_timestamp);
++    END LOOP;
+   END IF;
+   INSERT INTO app.sessions
+     (tenant_id, site_id, station_id, connector_id, csms_transaction_ref, csms_start_correlation_id,
+@@ -44,7 +50,11 @@
+           CASE WHEN v_status = 'failed' THEN p.started_at ELSE NULL END,
+           CASE WHEN v_status = 'failed' THEN 'csms' ELSE NULL END,
+           0, v_status,
+-          CASE WHEN v_status = 'failed' THEN 'START_REJECTED' ELSE NULL END);
++          CASE WHEN v_status = 'failed' THEN 'START_REJECTED' ELSE NULL END)
++  RETURNING id INTO v_new_id;
++  PERFORM app.notify_event(
++    CASE WHEN v_status = 'active' THEN 'session.started' ELSE 'session.updated' END,
++    p.tenant_id, p.site_id, p.station_id, v_new_id, p_csms_timestamp);
+   DELETE FROM app.pending_transaction_starts WHERE id = p.id;
+   INSERT INTO app.ingestion_events
+     (station_ref, tenant_id, site_id, kind, csms_event_ref, csms_timestamp, outcome, reason_code, payload_hash)
+
+=== ingest_transaction_stop ===
+--- 0033/ingest_transaction_stop
++++ 0034/ingest_transaction_stop
+@@ -24,6 +24,8 @@
+       energy_wh = greatest(energy_wh, v_energy), status = 'completed', stop_reason = left(p_reason, 64),
+       updated_at = now()
+   WHERE id = sess.id;
++  PERFORM app.notify_event('session.ended', sess.tenant_id, sess.site_id,
++    sess.station_id, sess.id, p_csms_timestamp);
+   INSERT INTO app.ingestion_events
+     (station_ref, tenant_id, site_id, kind, csms_event_ref, csms_timestamp, outcome, reason_code, payload_hash)
+   VALUES (p_station_ref, s.tenant_id, s.site_id, 'stop', p_event_ref, p_csms_timestamp, 'accepted', NULL, p_payload_hash)
+
+=== sweep_offline_stations ===
+--- 0033/sweep_offline_stations
++++ 0034/sweep_offline_stations
+@@ -3,10 +3,16 @@
+ SET search_path = pg_catalog, app, pg_temp AS $fn$
+ DECLARE n integer;
+ BEGIN
+-  UPDATE app.station_runtime_state
+-  SET connection_state='disconnected', last_disconnected_at=now(), updated_at=now()
+-  WHERE connection_state='connected'
+-    AND last_seen_at < now() - make_interval(secs => p_timeout_seconds);
+-  GET DIAGNOSTICS n = ROW_COUNT;
++  WITH offlined AS (
++    UPDATE app.station_runtime_state
++    SET connection_state='disconnected', last_disconnected_at=now(), updated_at=now()
++    WHERE connection_state='connected'
++      AND last_seen_at < now() - make_interval(secs => p_timeout_seconds)
++    RETURNING tenant_id, site_id, station_id, updated_at
++  )
++  SELECT count(*) INTO n FROM (
++    SELECT app.notify_event('station.connection', tenant_id, site_id, station_id, NULL, updated_at)
++    FROM offlined
++  ) notified;
+   RETURN n;
+ END $fn$;
+

@@ -1,0 +1,16 @@
+{
+  "iterations": 1000,
+  "visible_rows": [
+    1
+  ],
+  "p50_ms": 6.073602999999991,
+  "p95_ms": 9.377455000000054,
+  "max_ms": 19.456108999999742
+}
+{
+  "invisible_wrong_tenant_rows": 0,
+  "concurrent_reads": 20,
+  "all_visible": true,
+  "concurrent_total_ms": 161.15604199999999,
+  "concurrent_avg_ms": 8.0578021
+}
