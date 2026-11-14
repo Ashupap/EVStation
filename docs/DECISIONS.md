@@ -959,11 +959,39 @@ charger_reported_at)` because sample replay can arrive with a new envelope.
 - **Context.** Scope changes and token expiry must close streams promptly;
   LISTEN connections can be half-open or drop.
 - **Decision.** Scope is refreshed every 30 s; token expiry also closes via a
-  timer at JWT `exp`. Terminal reasons (`membership_removed`, `role_demoted`,
+  timer at JWT `exp`. Terminal reasons (`membership_removed`,
   `tenant_suspended`, `site_scope_lost`) make the browser call `es.close()`;
-  `token_expired`/`server_shutdown` reconnect with jitter. Each API instance
-  has one dedicated LISTEN client, pings it every 15 s, reconnects with
-  exponential backoff, and sends `resync` only after the new LISTEN is
-  confirmed. No replay/event log.
+  `token_expired`/`server_shutdown` reconnect with jitter. A role change that
+  narrows scope does not close the stream: the refreshed scope is applied and
+  the stream narrows to the sites it can still see. Each API instance has one
+  dedicated LISTEN client, pings it every 15 s, reconnects with exponential
+  backoff, and sends `resync` only after the new LISTEN is confirmed. No
+  replay/event log.
 - **Consequences.** Revocation latency is bounded by 30 s plus jitter. Multi-
   instance fan-out is local; each instance sees every NOTIFY.
+
+### ADR-0034: SSE kill switch, capped scope-refresh failures, and meter-notify interval
+
+- **Context.** The 2c SSE path was new and unproven at scale, and a live
+  stream is the hardest thing to take back once it is running. A failing
+  scope refresh must also not leave a stream open indefinitely, and meter
+  events arrive far more often than status or session events.
+- **Decision.** Three knobs, all environment variables with safe defaults:
+  - `SSE_ENABLED=false` makes `GET /events` return `503 SSE_DISABLED`. The
+    dashboard hook reads `NEXT_PUBLIC_SSE_ENABLED=false` and stays idle
+    instead of reconnecting in a loop. This is the operator's kill switch.
+  - The scope refresh fails closed on access-denied errors (the stream is
+    closed with `membership_removed`) and caps consecutive transient or
+    unclassified failures at `SSE_MAX_REFRESH_FAILURES` (default 3), after
+    which the stream closes with `scope_refresh_failed`. A successful refresh
+    resets the counter.
+  - The meter notify interval is `METER_NOTIFY_INTERVAL_S` (default 5). The
+    worker passes it to Postgres as `evstation.meter_notify_interval_s`, and
+    the ingest function only emits `session.meter` when the session's energy
+    changed and the interval has elapsed. An identical timestamp never
+    re-notifies.
+- **Consequences.** The kill switch lets an operator stop the realtime path
+  without a deploy. The refresh cap bounds how long a stream can stay open
+  against a database it can no longer read. The meter interval caps the
+  per-session notification rate; it does not affect how much meter data is
+  stored, only how much of it is streamed.

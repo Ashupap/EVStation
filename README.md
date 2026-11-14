@@ -24,7 +24,8 @@ tenant-scoped session/event reads) — complete.** Tagged `phase-2a-complete`
 and `phase-2b-complete`.
 
 **Phase 2c (SSE realtime events, Phase 2 documentation and acceptance) —
-implementation on `phase2c/sse`, awaiting review.** See
+complete.** Tagged `phase-2c-complete`; the live-latency and N-stream load
+evidence is on the `phase2c-evidence` branch, not yet merged. See
 [docs/PHASE2_ACCEPTANCE.md](docs/PHASE2_ACCEPTANCE.md),
 [docs/API_EVENTS.md](docs/API_EVENTS.md), and
 [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).

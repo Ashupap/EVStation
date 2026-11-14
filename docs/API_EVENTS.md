@@ -30,8 +30,25 @@ Control events:
 
 - `event: resync` — after LISTEN reconnect or `Last-Event-ID`; refetch.
 - `event: closed` — final event with `data.reason`:
-  `membership_removed`, `tenant_suspended`, `site_scope_lost`,
-  `token_expired`, `server_shutdown`, `backpressure`, `client_closed`.
+
+| Reason                 | Meaning                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `membership_removed`   | The actor no longer has a membership in the tenant                    |
+| `tenant_suspended`     | The tenant is suspended                                               |
+| `site_scope_lost`      | The actor lost access to a site it was receiving                      |
+| `token_expired`        | The access token reached its `exp`                                    |
+| `scope_refresh_failed` | Repeated scope-refresh errors, capped by `SSE_MAX_REFRESH_FAILURES`   |
+| `server_shutdown`      | The API process is shutting down                                      |
+| `backpressure`         | The client did not read fast enough; the per-connection buffer filled |
+| `client_closed`        | The client disconnected                                               |
+| `client_error`         | The connection errored                                                |
+| `write_error`          | Writing the frame to the socket failed                                |
+
+`membership_removed`, `tenant_suspended` and `site_scope_lost` are terminal:
+the browser closes the stream and does not reconnect. `token_expired`,
+`server_shutdown`, `backpressure` and `scope_refresh_failed` reconnect with
+jitter, so a client that only treats the first three as terminal will
+reconnect after a failed scope refresh.
 
 ## Event kinds and data
 
