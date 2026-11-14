@@ -16,9 +16,7 @@ deployment; owner phase is the phase expected to close it.
 | Low      | 2b    | `/sessions/:id` meter list is capped at 200                                                       | Add pagination if the UI needs history                                             |
 | Low      | 2b    | `evstation_worker_events_parked_total` excludes `RETRY_EXHAUSTED`                                 | Ledger is authoritative; metric fix is pending                                     |
 | Medium   | 2b    | Sustained ingestion is ~173 msg/s vs 200 target with prefetch(1)                                  | ADR-0027 sharding plan before the 500-station target                               |
-| Medium   | 2c    | SSE scope-revocation, slow-consumer/backpressure, and N-stream load checks are not automated yet  | Code/metrics exist; add before production pilot                                    |
-| Medium   | 2c    | No dedicated dashboard BFF client-abort leak test yet                                             | BFF aborts upstream on request signal; add integration test                        |
-| Low      | 2c    | No live simulator → NOTIFY → SSE latency test yet                                                 | Add to smoke/load evidence before pilot                                            |
 | Low      | 2c    | SSE Last-Event-ID has no replay                                                                   | Send `resync`; client refetches after reconnect                                    |
 | Low      | 2b    | No non-UTC jobs-path test                                                                         | Jobs use UTC month boundaries; add process-TZ test                                 |
 | Low      | 2c    | EventSource hook does not yet map BFF 401 to a dedicated session-expired UI                       | Stream closes and page/auth state must be refreshed; hook-level messaging deferred |
+| Medium   | 2c    | SSE load and live-latency evidence not yet produced (rows 9c, 11); caps and metrics in place      | Follow-up PR phase2c-evidence                                                      |

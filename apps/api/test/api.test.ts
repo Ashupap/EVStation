@@ -1581,6 +1581,29 @@ describe('station registration and credential rotation', () => {
     expect(second.json().next_cursor).toBeNull();
   });
 
+  it('disables /events with SSE_ENABLED=false while enabled returns auth checks', async () => {
+    const previous = process.env.SSE_ENABLED;
+    process.env.SSE_ENABLED = 'false';
+    try {
+      const disabled = await app.inject({
+        method: 'GET',
+        url: '/events',
+        headers: { ...auth('adminA'), 'x-tenant-id': IDS.tenantA },
+      });
+      expect(disabled.statusCode).toBe(503);
+      expect(disabled.json().error.code).toBe('SSE_DISABLED');
+    } finally {
+      process.env.SSE_ENABLED = previous;
+    }
+    const enabled = await app.inject({
+      method: 'GET',
+      url: '/events',
+      headers: { ...auth('platform'), 'x-tenant-id': IDS.tenantA },
+    });
+    expect(enabled.statusCode).toBe(403);
+    expect(enabled.json().error.code).toBe('PLATFORM_ADMIN_NOT_SUPPORTED');
+  });
+
   it('protects /metrics with a constant-time bearer token', async () => {
     const previous = process.env.METRICS_TOKEN;
     process.env.METRICS_TOKEN = 'metrics-secret';

@@ -17,7 +17,9 @@ export interface EventStreamState {
   closedReason: string | null;
 }
 
-export function useEventStream(enabled = true): EventStreamState {
+export function useEventStream(
+  enabled = process.env.NEXT_PUBLIC_SSE_ENABLED !== 'false',
+): EventStreamState {
   const [state, setState] = useState<EventStreamState>({
     status: 'closed',
     lastEvent: null,

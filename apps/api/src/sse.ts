@@ -142,6 +142,13 @@ export class SseHub {
   private readonly keepaliveMs = positiveEnv('SSE_KEEPALIVE_MS', 15_000);
   private readonly maxBufferBytes = positiveEnv('SSE_MAX_BUFFER_BYTES', 256 * 1024);
   private readonly maxRefreshFailures = positiveEnv('SSE_MAX_REFRESH_FAILURES', 3);
+  readonly enabled = (() => {
+    const raw = process.env.SSE_ENABLED;
+    if (raw === undefined || raw === '') return true;
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    throw new Error('SSE_ENABLED must be true or false');
+  })();
   private listener: pg.Client | null = null;
   private listenerStopping = false;
   private listenerRetry = 1_000;

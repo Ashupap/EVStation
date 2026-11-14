@@ -222,6 +222,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const requestedTenantId = tenantForRequest(definition, request);
     let principal: Principal | undefined;
     if (definition.streaming) {
+      if (process.env.SSE_ENABLED === 'false') {
+        throw new AppError(503, 'SSE_DISABLED', 'event streams are disabled');
+      }
       const scope = await db.transaction(async (client) => {
         await setActorContext(client, claims.sub);
         principal = await loadPrincipal(client, claims);

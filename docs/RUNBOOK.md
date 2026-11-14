@@ -391,3 +391,7 @@ consumer lag.
 ### SSE backpressure on real networks
 
 The per-connection byte cap is a user-space control. Kernel socket buffers can absorb frames before `writableLength` grows, so a slow client is cut off when the user-space buffer fills, not instantly. The deterministic hub test proves the policy; the raw-net check is best-effort because loopback/kernel buffering varies.
+
+### SSE kill switch
+
+Set `SSE_ENABLED=false` to make `GET /events` return `503 SSE_DISABLED`; the dashboard hook reads `NEXT_PUBLIC_SSE_ENABLED=false` and stays idle without reconnect loops. Default is enabled. This is the safety valve until the follow-up load evidence PR lands.
