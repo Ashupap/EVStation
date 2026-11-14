@@ -186,7 +186,7 @@ CREATE OR REPLACE FUNCTION app.ingest_meter_values(
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, app, pg_temp
 AS $fn$
-DECLARE s record; sess record; sample jsonb; idx integer := 0; v_energy bigint; v_max_energy bigint; v_power integer; v_notify boolean := false;
+DECLARE s record; sess record; sample jsonb; idx integer := 0; v_energy bigint; v_max_energy bigint; v_power integer; v_should_notify boolean := false;
 BEGIN
   SELECT * INTO s FROM app.ingest_station(p_station_ref);
   IF NOT FOUND THEN RETURN app.reject_ingest_event(p_station_ref, 'UNKNOWN_STATION', p_payload_hash); END IF;
@@ -213,17 +213,16 @@ BEGIN
     ON CONFLICT (station_id, csms_event_ref, csms_timestamp) DO NOTHING;
   END LOOP;
   IF v_max_energy IS NOT NULL THEN
+    v_should_notify :=
+      (sess.last_meter_notify_at IS NULL OR
+       sess.last_meter_notify_at <= p_csms_timestamp - make_interval(secs => coalesce(nullif(current_setting('evstation.meter_notify_interval_s', true), '')::int, 5)))
+      AND greatest(sess.energy_wh, greatest(0, v_max_energy - sess.meter_start_wh)) IS DISTINCT FROM sess.energy_wh;
     UPDATE app.sessions
     SET energy_wh = greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)),
-        last_meter_notify_at = CASE
-          WHEN (last_meter_notify_at IS NULL OR
-                last_meter_notify_at <= p_csms_timestamp - make_interval(secs => coalesce(nullif(current_setting('evstation.meter_notify_interval_s', true), '')::int, 5)))
-           AND greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)) IS DISTINCT FROM energy_wh
-          THEN p_csms_timestamp ELSE last_meter_notify_at END,
+        last_meter_notify_at = CASE WHEN v_should_notify THEN p_csms_timestamp ELSE last_meter_notify_at END,
         updated_at = now()
-    WHERE id = sess.id
-    RETURNING (last_meter_notify_at = p_csms_timestamp) INTO v_notify;
-    IF v_notify THEN
+    WHERE id = sess.id;
+    IF v_should_notify THEN
       PERFORM app.notify_event('session.meter', sess.tenant_id, sess.site_id,
         sess.station_id, sess.id, p_csms_timestamp);
     END IF;

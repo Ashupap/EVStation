@@ -245,6 +245,49 @@ describe('SSE revocation', () => {
     }
   }, 12_000);
 
+  it('viewer and in-scope site_manager receive; out-of-scope manager does not', async () => {
+    const viewer = await open('viewerA');
+    const manager = await open('managerA');
+    try {
+      await status(STATION_A, 1, 20);
+      await viewer.waitForEvent('station.status', 1_000);
+      await manager.waitForEvent('station.status', 1_000);
+    } finally {
+      await viewer.close();
+      await manager.close();
+    }
+    await db.superuser.query(
+      'UPDATE app.membership_sites SET site_id=$3 WHERE membership_id=(SELECT id FROM app.memberships WHERE user_id=$1 AND tenant_id=$2)',
+      [SEED_IDS.acmeSiteManager, SEED_IDS.acmeTenant, SEED_IDS.acmeSite2],
+    );
+    const outOfScope = await open('managerA');
+    const healthy = await open('viewerA');
+    try {
+      await status(STATION_A, 1, 21);
+      await healthy.waitForEvent('station.status', 1_000);
+      const closed = await outOfScope.waitForClose(800).catch(() => null);
+      expect(closed).toBeNull();
+    } finally {
+      await db.superuser.query(
+        'UPDATE app.membership_sites SET site_id=$3 WHERE membership_id=(SELECT id FROM app.memberships WHERE user_id=$1 AND tenant_id=$2)',
+        [SEED_IDS.acmeSiteManager, SEED_IDS.acmeTenant, SEED_IDS.acmeSite1],
+      );
+      await outOfScope.close();
+      await healthy.close();
+    }
+  }, 10_000);
+
+  it('deleted user closes with membership_removed within two refreshes', async () => {
+    const viewer = await open('viewerA');
+    try {
+      await db.superuser.query('DELETE FROM app.users WHERE id=$1', [SEED_IDS.acmeViewer]);
+      const closed = await viewer.waitForClose(2_000);
+      expect(JSON.parse(closed.data).reason).toBe('membership_removed');
+    } finally {
+      await viewer.close();
+    }
+  }, 10_000);
+
   it('best-effort kernel-buffer integration: healthy stream gets every event in order', async () => {
     const token = 'adminA';
     const socket = net.connect(Number(new URL(baseUrl).port), '127.0.0.1');

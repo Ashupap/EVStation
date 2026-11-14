@@ -69,3 +69,61 @@ describe('SSE refresh classifier', () => {
     expect(transientRaw.chunks.join('')).toContain('scope_refresh_failed');
   });
 });
+
+describe('M2 actor preference and fallback', () => {
+  it('prefers tenant_admin and falls back when that actor cannot see the row', async () => {
+    const { Writable } = await import('node:stream');
+    const chunks: string[] = [];
+    const raw = new Writable({
+      write(c, _e, cb) {
+        chunks.push(c.toString());
+        cb();
+      },
+    });
+    const mk = (id: string, role: string) => ({
+      id,
+      scope: {
+        actorId: id,
+        email: `${id}@x`,
+        tenantId: 't1',
+        role,
+        siteIds: [],
+        tokenExpiresAt: null,
+      },
+      response: { raw },
+      raw,
+      closed: false,
+      refreshFailures: 0,
+    });
+    const admin = mk('admin', 'tenant_admin');
+    const viewer = mk('viewer', 'viewer');
+    const instance = new SseHub(
+      { transaction: async () => null } as never,
+      {} as never,
+    ) as unknown as {
+      connections: Map<string, unknown>;
+      reread: (
+        actor: string,
+      ) => Promise<{ tenant_id: string; site_id: string; data: Record<string, unknown> } | null>;
+      processNotification: (payload: Record<string, unknown>) => Promise<void>;
+    };
+    instance.connections.set(admin.id, admin);
+    instance.connections.set(viewer.id, viewer);
+    const calls: string[] = [];
+    instance.reread = async (actor: string) => {
+      calls.push(actor);
+      return actor === 'admin'
+        ? null
+        : { tenant_id: 't1', site_id: 's1', data: { station_id: 'st1', updated_at: 'now' } };
+    };
+    await instance.processNotification({
+      kind: 'station.status',
+      tenant_id: 't1',
+      site_id: 's1',
+      station_id: 'st1',
+      occurred_at: '2026-11-12T00:00:00Z',
+    });
+    expect(calls).toEqual(['admin', 'viewer']);
+    expect(chunks.join('')).toContain('event: station.status');
+  });
+});

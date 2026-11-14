@@ -221,6 +221,53 @@ describe('Phase 2c NOTIFY emission', () => {
     ]);
   });
 
+  test('identical csms timestamp does not re-notify meter events', async () => {
+    await call(ingest, 'ingest_transaction_start', [
+      STATION_REF,
+      'same-ts',
+      1,
+      'TAG',
+      0,
+      '2026-11-12T10:00:00Z',
+      'same-ts-start',
+      '2026-11-12T10:00:00Z',
+      HASH,
+    ]);
+    await call(ingest, 'ingest_transaction_start_response', [
+      STATION_REF,
+      'same-ts',
+      'same-ts-tx',
+      'Accepted',
+      'same-ts-response',
+      '2026-11-12T10:00:01Z',
+      HASH,
+    ]);
+    await waitNotifications();
+    notifications = [];
+    const samples = JSON.stringify([{ recorded_at: '2026-11-12T10:01:00Z', energy_wh: 500 }]);
+    await call(ingest, 'ingest_meter_values', [
+      STATION_REF,
+      'same-ts-tx',
+      'same-meter-1',
+      '2026-11-12T10:01:00Z',
+      samples,
+      HASH,
+    ]);
+    expect((await waitNotifications()).map((item) => JSON.parse(item).kind)).toEqual([
+      'session.meter',
+    ]);
+    notifications = [];
+    await call(ingest, 'ingest_meter_values', [
+      STATION_REF,
+      'same-ts-tx',
+      'same-meter-2',
+      '2026-11-12T10:01:00Z',
+      JSON.stringify([{ recorded_at: '2026-11-12T10:01:02Z', energy_wh: 750 }]),
+      HASH,
+    ]);
+    expect(await waitNotifications()).toEqual([]);
+  });
+
   test('job functions emit through the same notifier', async () => {
     await db.superuser.query(
       "UPDATE app.station_runtime_state SET connection_state='connected', last_seen_at=now()-interval '5 minutes' WHERE station_id=$1",
