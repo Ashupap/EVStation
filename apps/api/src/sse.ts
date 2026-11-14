@@ -401,10 +401,7 @@ export class SseHub {
     for (const connection of this.connections.values()) {
       if (connection.closed) continue;
       if (connection.scope.tenantId !== row.tenant_id) continue;
-      if (
-        connection.scope.role !== 'tenant_admin' &&
-        !connection.scope.siteIds.includes(row.site_id)
-      ) {
+      if (!scopeCanSeeSite(connection.scope.role, connection.scope.siteIds, row.site_id)) {
         continue;
       }
       this.send(
@@ -550,7 +547,8 @@ export class SseHub {
     if (connection.closed) return;
     try {
       const writable = connection.raw.write(frame);
-      if (!writable || connection.raw.writableLength > this.maxBufferBytes) {
+      void writable;
+      if (connection.raw.writableLength > this.maxBufferBytes) {
         this.metrics.backpressureCloses += 1;
         this.closeConnection(connection, 'backpressure');
       }
@@ -632,8 +630,17 @@ export class SseHub {
       }
       connection.scope.role = checked.membership.role;
       connection.scope.siteIds = checked.siteIds;
-    } catch {
-      // Temporary DB failure: keep the stream and retry on the next jittered refresh.
+      connection.refreshFailures = 0;
+    } catch (error) {
+      const kind = classifyRefreshError(error);
+      if (kind === 'access_denied') {
+        this.closeConnection(connection, 'membership_removed');
+        return;
+      }
+      connection.refreshFailures += 1;
+      if (kind === 'unknown' || connection.refreshFailures >= this.maxRefreshFailures) {
+        this.closeConnection(connection, 'scope_refresh_failed');
+      }
     }
   }
 }

@@ -11,6 +11,15 @@ class StuckWritable extends Writable {
   }
 }
 
+class StuckWritableBelowCap extends Writable {
+  constructor() {
+    super({ highWaterMark: 1 });
+  }
+  _write(): void {
+    /* intentionally pending */
+  }
+}
+
 class CollectingWritable extends Writable {
   chunks: string[] = [];
   constructor() {
@@ -45,12 +54,28 @@ function connection(raw: Writable) {
 }
 
 describe('SSE deterministic backpressure policy', () => {
+  it('does not close a healthy writer when write() returns false below the cap', () => {
+    const healthy = new StuckWritableBelowCap();
+    const conn = connection(healthy);
+    const instance = hub() as unknown as {
+      maxBufferBytes: number;
+      connections: Map<string, unknown>;
+      sendRaw: (c: unknown, f: string) => void;
+    };
+    instance.maxBufferBytes = 64;
+    instance.connections.set(conn.id, conn);
+    instance.sendRaw(conn, 'x'.repeat(40));
+    expect(healthy.destroyed).toBe(false);
+  });
+
   it('closes a stuck writer and leaves a healthy writer intact', () => {
     const instance = hub() as unknown as {
+      maxBufferBytes: number;
       connections: Map<string, unknown>;
       sendRaw: (connection: unknown, frame: string) => void;
       snapshot: () => { backpressure_closes: number };
     };
+    instance.maxBufferBytes = 16;
     const stuckRaw = new StuckWritable();
     const stuck = connection(stuckRaw);
     instance.connections.set(stuck.id, stuck);
