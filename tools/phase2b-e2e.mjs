@@ -203,6 +203,7 @@ function apiEnv() {
     CSMS_AUTH_MODE: 'localDev',
     CSMS_TOKEN_URL: `http://localhost:${KC_PORT}/realms/evstation/protocol/openid-connect/token`,
     CSMS_TENANT_ID: value('CSMS_TENANT_ID', '1'),
+    METRICS_TOKEN: value('METRICS_TOKEN', 'test-metrics-token'),
     CSMS_PROVISIONER_CLIENT_ID: value('CSMS_PROVISIONER_CLIENT_ID', 'csms-provisioner'),
     CSMS_PROVISIONER_CLIENT_SECRET: requireValue(
       'KC_CSMS_PROVISIONER_CLIENT_SECRET',

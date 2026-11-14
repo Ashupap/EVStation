@@ -1581,6 +1581,32 @@ describe('station registration and credential rotation', () => {
     expect(second.json().next_cursor).toBeNull();
   });
 
+  it('protects /metrics with a constant-time bearer token', async () => {
+    const previous = process.env.METRICS_TOKEN;
+    process.env.METRICS_TOKEN = 'metrics-secret';
+    try {
+      expect((await app.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url: '/metrics',
+            headers: { authorization: 'Bearer wrong' },
+          })
+        ).statusCode,
+      ).toBe(401);
+      const ok = await app.inject({
+        method: 'GET',
+        url: '/metrics',
+        headers: { authorization: 'Bearer metrics-secret' },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toHaveProperty('sse_connections');
+    } finally {
+      process.env.METRICS_TOKEN = previous;
+    }
+  });
+
   it('rejects platform admins on /events with a stable code', async () => {
     const response = await app.inject({
       method: 'GET',
