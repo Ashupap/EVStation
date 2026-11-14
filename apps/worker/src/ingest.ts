@@ -14,6 +14,34 @@ const SUPPORTED_ACTIONS = new Set([
 
 const STATION_REF = /^[A-Za-z0-9-]{1,64}$/;
 
+/**
+ * `ack` and `retry` are broker dispositions; `parked` is also acked, but it
+ * tells the caller that the event was written to the parked ledger so the
+ * parked-events metric reflects every parked event.
+ */
+export type IngestDisposition = 'ack' | 'retry' | 'parked';
+
+export interface WorkerCounters {
+  acked: number;
+  retried: number;
+  parked: number;
+}
+
+/** Counts one handled event. `parked` events are acked and also parked. */
+export function countDisposition(counters: WorkerCounters, disposition: IngestDisposition): void {
+  if (disposition === 'retry') {
+    counters.retried += 1;
+    return;
+  }
+  counters.acked += 1;
+  if (disposition === 'parked') counters.parked += 1;
+}
+
+/** Maps a disposition onto the broker: only `retry` is nacked. */
+export function brokerDisposition(disposition: IngestDisposition): 'ack' | 'retry' {
+  return disposition === 'retry' ? 'retry' : 'ack';
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
@@ -61,7 +89,7 @@ export async function handleFailure(
   event: CsmsEvent,
   pool: Pool,
   maxRetries: number,
-): Promise<'ack' | 'retry'> {
+): Promise<IngestDisposition> {
   if (event.deathCount < maxRetries) return 'retry';
   const ref = stationRef(event) ?? 'INVALID';
   const body = event.body;
@@ -74,7 +102,7 @@ export async function handleFailure(
     'POISON',
     hash(event),
   ]);
-  return 'ack';
+  return 'parked';
 }
 
 function eventRef(event: CsmsEvent): string {
@@ -86,7 +114,7 @@ export async function handleEvent(
   event: CsmsEvent,
   pool: Pool,
   maxRetries: number,
-): Promise<'ack' | 'retry'> {
+): Promise<IngestDisposition> {
   const ref = stationRef(event);
   if (event.parseError || !event.body) return reject(pool, ref, 'MALFORMED_PAYLOAD', event);
   const body = event.body;
@@ -252,6 +280,7 @@ export async function handleEvent(
       return reject(pool, ref, 'UNSUPPORTED_ACTION', event);
   }
 
+  if (result === 'parked') return 'parked';
   if (result !== 'retry') return 'ack';
   if (event.deathCount < maxRetries) return 'retry';
   await call(pool, 'record_parked_event', [
@@ -262,5 +291,5 @@ export async function handleEvent(
     'RETRY_EXHAUSTED',
     payloadHash,
   ]);
-  return 'ack';
+  return 'parked';
 }
