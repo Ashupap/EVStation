@@ -1593,7 +1593,8 @@ describe('station registration and credential rotation', () => {
       expect(disabled.statusCode).toBe(503);
       expect(disabled.json().error.code).toBe('SSE_DISABLED');
     } finally {
-      process.env.SSE_ENABLED = previous;
+      if (previous === undefined) delete process.env.SSE_ENABLED;
+      else process.env.SSE_ENABLED = previous;
     }
     const enabled = await app.inject({
       method: 'GET',
