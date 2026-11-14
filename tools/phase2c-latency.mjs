@@ -47,9 +47,9 @@ const requireValue = (name) => {
 
 const KC_PORT = value('KEYCLOAK_HTTP_HOST_PORT', '8180');
 const KC = `http://127.0.0.1:${KC_PORT}`;
-const API_PORT = value('PHASE2C_API_PORT', '4000');
+const API_PORT = value('PHASE2C_LATENCY_API_PORT', '4020');
 const API = `http://127.0.0.1:${API_PORT}`;
-const WORKER_HEALTH_PORT = value('PHASE2C_WORKER_HEALTH_PORT', '4110');
+const WORKER_HEALTH_PORT = value('PHASE2C_LATENCY_WORKER_HEALTH_PORT', '4130');
 const TENANT_A = '10000000-0000-4000-8000-000000000001';
 const SITE_A = '20000000-0000-4000-8000-000000000001';
 const E2E_PASSWORD = value('E2E_USER_PASSWORD', 'evstation-dev-password');

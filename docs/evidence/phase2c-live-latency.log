@@ -1,8 +1,8 @@
 simulator_status_frames_sent 5
 
 phase2c live latency — simulator -> worker -> NOTIFY -> /events client
-run 2026-11-14T06:26:37.030Z
-station ACME-BLR-962 (d3ee6a74-f65c-4834-96d6-e91174ff131d)
+run 2026-11-14T07:46:59.788Z
+station ACME-BLR-710 (550032ee-7c2d-4f8e-b07a-0756d25a42ea)
 tenant 10000000-0000-4000-8000-000000000001
 node v24.22.2
 platform linux x64
@@ -13,14 +13,14 @@ sse_frames_by_kind {"station.connection":1,"station.status":5,"session.started":
 status_frames_sent 5
 status_frames_received 5
 latency_samples 5
-latency_ms_min 29
-latency_ms_p50 38
-latency_ms_p95 51
-latency_ms_max 51
+latency_ms_min 30
+latency_ms_p50 37
+latency_ms_p95 56
+latency_ms_max 56
 
 per-sample latency (ms from the OCPP frame being sent to the SSE client):
-  station.status Available 50
-  station.status Preparing 29
-  station.status Charging 51
-  station.status Finishing 38
-  station.status Available 34
+  station.status Available 56
+  station.status Preparing 30
+  station.status Charging 49
+  station.status Finishing 37
+  station.status Available 32
