@@ -57,10 +57,7 @@ export class SseStream {
       if (this.closed) throw new Error(`stream closed before ${name}`);
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error(`timeout waiting for ${name}`);
-      await new Promise<void>((resolve) => {
-        this.waiters.push(resolve);
-        setTimeout(resolve, Math.min(remaining, 100));
-      });
+      await this.sleep(remaining);
     }
   }
 
@@ -72,11 +69,52 @@ export class SseStream {
       if (this.closed) throw new Error(`stream closed after ${matching.length}/${count}`);
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error(`timeout waiting for ${count} ${name}`);
-      await new Promise<void>((resolve) => {
-        this.waiters.push(resolve);
-        setTimeout(resolve, Math.min(remaining, 100));
-      });
+      await this.sleep(remaining);
     }
+  }
+
+  /**
+   * Waits for `count` frames of `name`, failing only when delivery stalls.
+   *
+   * The per-event cost of an SSE stream is a database re-read, so a fixed
+   * wall-clock deadline fails on a loaded machine even when delivery is
+   * healthy. This waits until `stallMs` passes with no new frame, and keeps
+   * `overallMs` as a backstop so a stream that stops early still fails.
+   */
+  async waitForCountWithProgress(
+    name: string,
+    count: number,
+    options: { stallMs: number; overallMs: number },
+  ): Promise<SseFrame[]> {
+    const overallDeadline = Date.now() + options.overallMs;
+    let seen = 0;
+    let lastProgressAt = Date.now();
+    for (;;) {
+      const matching = this.frames.filter((item) => item.name === name);
+      if (matching.length >= count) return matching;
+      if (this.closed) throw new Error(`stream closed after ${matching.length}/${count}`);
+      if (matching.length > seen) {
+        seen = matching.length;
+        lastProgressAt = Date.now();
+      } else if (Date.now() - lastProgressAt >= options.stallMs) {
+        throw new Error(
+          `stalled waiting for ${count} ${name}: ${matching.length} received, ` +
+            `none for ${options.stallMs}ms`,
+        );
+      }
+      const remaining = overallDeadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error(`timeout waiting for ${count} ${name}: ${matching.length} received`);
+      }
+      await this.sleep(remaining);
+    }
+  }
+
+  private sleep(remainingMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.waiters.push(resolve);
+      setTimeout(resolve, Math.min(remainingMs, 100));
+    });
   }
 
   count(name: string): number {
