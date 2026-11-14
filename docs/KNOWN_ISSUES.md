@@ -19,5 +19,5 @@ deployment; owner phase is the phase expected to close it.
 | Low      | 2b    | The worker jobs path has no process-timezone test                                                 | Jobs compute month boundaries with `Date.UTC`; the DB suite covers non-UTC sessions |
 | Low      | 2c    | SSE Last-Event-ID has no replay                                                                   | Send `resync`; client refetches after reconnect                                     |
 | Low      | 2c    | EventSource hook does not yet map BFF 401 to a dedicated session-expired UI                       | Stream closes and page/auth state must be refreshed; hook-level messaging deferred  |
-| Medium   | 2c    | Per-station SSE re-read throughput is about 200 events/s; a single station cannot sustain more    | Spread events over distinct stations; the ceiling is measured in the load evidence  |
+| Medium   | 2c    | Per-station SSE re-read throughput is 200-300 events/s; a single station cannot sustain more      | Spread events over distinct stations; the ceiling is measured in the load evidence  |
 | Medium   | 2c    | No repeatable check that the first SSE chunk arrives within 2 s through a real ingress            | Deploy checklist item in the RUNBOOK; no script exists yet                          |
