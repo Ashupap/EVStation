@@ -46,9 +46,10 @@ do not collide with the Phase 2b end-to-end test.
 The committed evidence logs were produced on a 4-core Intel i3-4005U. The
 nightly smoke workflow runs both scripts and uploads its own logs as the
 `phase2c-evidence` artifact; on a faster runner the same run reports lower
-latency (p50 10 ms, p95 15 ms) and a higher per-station re-read ceiling
-(300 events/s). Both runs delivered every event to every stream with no
-drops.
+latency (p50 17 ms, p95 28 ms on the final head's run) and a higher
+per-station re-read ceiling (300 events/s). The latency figures vary a
+little between runs. Both runs delivered every event to every stream with
+no drops.
 
 Browser-level check: the automated Chromium case
 `never redirects a malicious returnTo off the dashboard origin`
