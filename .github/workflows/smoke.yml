@@ -50,6 +50,10 @@ jobs:
         run: pnpm --filter @evstation/dashboard exec playwright install --with-deps chromium
       - name: Real Keycloak + API dashboard E2E
         run: pnpm --filter @evstation/dashboard test:e2e:real
+      - name: Phase 2c live latency (simulator to SSE client)
+        run: pnpm test:e2e:phase2c-latency
+      - name: Phase 2c N-stream SSE load
+        run: pnpm test:e2e:phase2c-load
       - name: Collect artifacts on failure
         if: failure()
         run: |
@@ -64,3 +68,13 @@ jobs:
         with:
           name: smoke-failure-artifacts
           path: smoke-*
+      - name: Upload the Phase 2c evidence logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: phase2c-evidence
+          retention-days: 30
+          path: |
+            docs/evidence/phase2c-live-latency.log
+            docs/evidence/phase2c-load-200.log
+          if-no-files-found: warn

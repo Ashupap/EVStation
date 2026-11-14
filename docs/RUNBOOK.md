@@ -17,6 +17,27 @@ The authoritative decisions behind these commands live in
 OS notes: developed and smoke-tested on Linux (x86_64, Ubuntu 22.04).
 Windows/macOS should work through Docker Desktop but are unverified.
 
+### Node setup
+
+The Node version is pinned exactly, and `engines.node` plus `engine-strict`
+in `.npmrc` make an install fail fast on the wrong version rather than
+misbehave later. `.nvmrc` holds the same pin, so a version manager picks it
+up automatically:
+
+```shell
+nvm use            # reads .nvmrc
+# or, without a version manager:
+npx -y node@24.22.2 --version   # ad-hoc, does not change your default
+```
+
+pnpm is pinned through the `packageManager` field and is selected by
+Corepack, so `corepack enable` is enough:
+
+```shell
+corepack enable
+pnpm --version      # 10.30.3
+```
+
 **Free ports** (all published services bind to `127.0.0.1` only):
 
 ```
@@ -348,14 +369,49 @@ worker to finish the session, meter samples and boot fields.
   the local Hasura console), or reset state with
   `pnpm dev:stack:down --volumes && pnpm dev:stack` followed by `pnpm smoke`
   (fixtures are recreated automatically).
+- **`pnpm db:migrate` fails with a checksum mismatch** — the database
+  recorded a different checksum for a migration than the file in the repo
+  now has. This happens when a migration file is edited after it was applied
+  to a database that is not thrown away afterwards. Do not edit a shipped
+  migration (see CLAUDE.md); use a throwaway database or reset the volumes
+  during PR work instead.
+
+  If the database's schema already matches the file and only the recorded
+  checksum is stale, the ledger row can be corrected. First confirm the
+  mismatch is real and the schema agrees — compare the migration's function
+  bodies with what the database actually holds:
+
+  ```shell
+  node packages/db/scripts/function-diff.mjs 0033_phase2b_review_fixes.sql \
+    0034_phase2c_sse_notifications.sql
+  ```
+
+  Then, with the migrator credentials, update the one row:
+
+  ```sql
+  UPDATE public.schema_migrations
+     SET checksum = '<sha256 of the current file>'
+   WHERE filename = '0034_phase2c_sse_notifications.sql';
+  ```
+
+  The checksum is the sha256 of the file's bytes, which is what
+  `packages/db/scripts/lib.mjs` computes. Resetting the volumes
+  (`pnpm dev:stack:down --volumes && pnpm dev:stack`) achieves the same
+  thing without touching the ledger.
 
 ## SSE operations
 
 `GET /api/events` is the dashboard BFF stream; the API owns `GET /events`.
 Metrics are exposed by the API `/metrics` endpoint and require `Authorization: Bearer $METRICS_TOKEN` (constant-time compare; unset/disabled returns 401):
 `sse_connections`, `events_notified`, `events_dropped_not_visible`,
-`reread_p50_ms`, `reread_p95_ms`, `resyncs`, `backpressure_closes`, and
-`notification_queue_usage`.
+`events_dropped_queue_full`, `reread_p50_ms`, `reread_p95_ms`, `resyncs`,
+`backpressure_closes`, `notification_queue_usage`, and
+`notification_queue_usage_high`.
+
+`/metrics` is a public path, so it counts against the per-actor rate limit
+(100 requests per minute, keyed on the client address when the request
+carries no claim). Poll it no faster than once every few seconds, and treat
+a 429 as "not yet" rather than as a counter reset.
 
 Limits are 10 streams/user, 250/tenant, and 2,000 per API process; check the
 process fd limit before raising them. The API does not replay events: after a
@@ -377,8 +433,38 @@ location = /api/events {
 ```
 
 The app sends `X-Accel-Buffering: no` and `Cache-Control: no-transform`.
-Deploy smoke must assert the first SSE chunk arrives within 2 s through the real
-ingress.
+
+**Deploy checklist item.** Confirm that the first SSE chunk arrives within 2 s
+through the real ingress. No script asserts this yet — it is a manual check
+per deployment, recorded in KNOWN_ISSUES until it is automated.
+
+### Phase 2c SSE evidence
+
+Two scripts reproduce the live latency and N-stream load numbers. They need
+the local stack running (`pnpm dev:stack`, `pnpm db:migrate && pnpm db:seed`)
+and the simulator's Python dependencies installed. Each starts its own API
+and worker on its own ports, so they can run alongside other work:
+
+```shell
+pnpm test:e2e:phase2c-latency   # simulator -> worker -> NOTIFY -> /events
+pnpm test:e2e:phase2c-load      # 200 concurrent streams under steady ingest
+```
+
+They write `docs/evidence/phase2c-live-latency.log` and
+`docs/evidence/phase2c-load-200.log`. The nightly smoke workflow runs both
+and uploads the logs with a 30-day retention.
+
+The load script provisions its own users and stations and removes them
+afterwards. It respects the shipped limits rather than bypassing them: 10
+streams per user, 250 per tenant, 2000 per process, so it creates enough
+users to hold the requested streams.
+
+### Per-station re-read throughput
+
+Re-reads for one station are serialized behind each other, so a single
+station tops out at about 200 events/s on the reference machine. Spread
+events over distinct stations to go faster; the ceiling is measured, not
+assumed, and the measurement is in the load evidence log.
 
 RabbitMQ queue arguments are immutable: after changing the 5 GiB
 `reject-publish` definition, delete `evstation.ingest` and
@@ -394,4 +480,4 @@ The per-connection byte cap is a user-space control. Kernel socket buffers can a
 
 ### SSE kill switch
 
-Set `SSE_ENABLED=false` to make `GET /events` return `503 SSE_DISABLED`; the dashboard hook reads `NEXT_PUBLIC_SSE_ENABLED=false` and stays idle without reconnect loops. Default is enabled. This is the safety valve until the follow-up load evidence PR lands.
+Set `SSE_ENABLED=false` to make `GET /events` return `503 SSE_DISABLED`; the dashboard hook reads `NEXT_PUBLIC_SSE_ENABLED=false` and stays idle without reconnect loops. Default is enabled. This is the safety valve for stopping the realtime path without a deploy (ADR-0034).

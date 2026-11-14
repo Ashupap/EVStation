@@ -2,7 +2,7 @@ import http from 'node:http';
 import pg from 'pg';
 import { subscribeAmqpEvents } from '@evstation/csms-adapter';
 import { loadWorkerConfig } from './config.js';
-import { handleEvent, handleFailure } from './ingest.js';
+import { handleEvent, handleFailure, countDisposition, brokerDisposition } from './ingest.js';
 import { runJobs } from './jobs.js';
 
 const config = loadWorkerConfig();
@@ -117,11 +117,10 @@ async function main(): Promise<void> {
         const result = await handleEvent(event, ingestPool, config.maxRetries);
         latencies.push(performance.now() - started);
         if (latencies.length > 10_000) latencies.shift();
-        if (result === 'ack') counters.acked += 1;
-        else counters.retried += 1;
+        countDisposition(counters, result);
         lastEventAt = new Date().toISOString();
         lastError = null;
-        return result;
+        return brokerDisposition(result);
       } catch (error) {
         counters.errors += 1;
         latencies.push(performance.now() - started);
@@ -130,13 +129,8 @@ async function main(): Promise<void> {
         console.error('worker_event_failed', { routingKey: event.routingKey, error: lastError });
         try {
           const result = await handleFailure(event, ingestPool, config.maxRetries);
-          if (result === 'ack') {
-            counters.parked += 1;
-            counters.acked += 1;
-          } else {
-            counters.retried += 1;
-          }
-          return result;
+          countDisposition(counters, result);
+          return brokerDisposition(result);
         } catch (failureError) {
           lastError = failureError instanceof Error ? failureError.message : String(failureError);
           throw failureError;

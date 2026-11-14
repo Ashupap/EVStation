@@ -100,9 +100,12 @@ At connect the API loads the principal and tenant scope once (same
   - tenant suspended
   - any previously allowed site id is no longer in the membership site scope
   - access token reached its `exp` timestamp
-- `reason` values: `membership_removed`, `role_demoted`,
-  `tenant_suspended`, `site_scope_lost`, `token_expired`,
-  `server_shutdown`, `backpressure`.
+- `reason` values: `membership_removed`, `tenant_suspended`,
+  `site_scope_lost`, `token_expired`, `scope_refresh_failed`,
+  `server_shutdown`, `backpressure`, `client_closed`, `client_error`,
+  `write_error`.
+  A role change that narrows scope is not a close reason: the refreshed
+  scope is applied and the stream narrows to the sites it can still see.
 - Token expiry is explicit: the API closes with `token_expired`; the browser
   must obtain a fresh dashboard session/token and reconnect. EventSource's
   automatic reconnect alone must not be treated as a new authorization.
@@ -247,18 +250,24 @@ for a station the user's site scope excludes. A connection must never receive
 another tenant's event even if the NOTIFY payload is spoofed with a foreign
 tenant id.
 
-## 12. Migration 0034 (implemented on the 2c branch, not merged)
+## 12. Migration 0034 (merged as part of `phase-2c-complete`)
 
-Numbering starts at `0034`; `0028` remains an intentional gap. The implemented
+Numbering starts at `0034`; `0028` remains an intentional gap. The shipped
 file is `packages/db/sql/0034_phase2c_sse_notifications.sql`. It adds
 `sessions.last_meter_notify_at`, the plain `LANGUAGE sql` `notify_event`
 helper (no `SECURITY DEFINER`, owned by `evstation_ingest_definer`, no event_ref
 in the payload), the atomically throttled meter update, and notify call sites
-for connection transitions, status, session start/update/end/meter, sweep,
-stale close and expiry. Existing ingest/job functions keep their 0032/0033
-owners. The function-body diff evidence is
-`docs/evidence/phase2c-0034-function-diff.log`; all existing DB tests pass
-unmodified.
+for connection transitions, status, session start/update/end/meter, sweep and
+stale close. Existing ingest/job functions keep their 0032/0033 owners. The
+function-body diff evidence is
+`docs/evidence/phase2c-0034-function-diff.log`, regenerated from the shipped
+migrations with `packages/db/scripts/function-diff.mjs`; all existing DB tests
+pass unmodified.
+
+Two details differ from the original sketch below, and the shipped file is
+the reference: `notify_event` takes a `p_connector_id` argument so a status
+event can name its connector, and the meter throttle computes the decision
+before the `UPDATE` rather than reading it back with `RETURNING`.
 
 ```sql
 ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS last_meter_notify_at timestamptz;
@@ -266,7 +275,8 @@ GRANT UPDATE (last_meter_notify_at) ON app.sessions TO evstation_ingest_definer;
 
 CREATE OR REPLACE FUNCTION app.notify_event(
   p_kind text, p_tenant_id uuid, p_site_id uuid, p_station_id uuid,
-  p_session_id uuid, p_occurred_at timestamptz, p_event_id uuid DEFAULT gen_random_uuid()
+  p_session_id uuid, p_occurred_at timestamptz,
+  p_connector_id uuid DEFAULT NULL, p_event_id uuid DEFAULT gen_random_uuid()
 ) RETURNS void
 LANGUAGE sql
 SET search_path = pg_catalog, app, pg_temp
@@ -275,20 +285,33 @@ AS $$
     'v', 1, 'id', p_event_id, 'kind', p_kind,
     'tenant_id', p_tenant_id, 'site_id', p_site_id,
     'station_id', p_station_id, 'session_id', p_session_id,
-    'occurred_at', p_occurred_at
+    'connector_id', p_connector_id, 'occurred_at', p_occurred_at
   )::text)
 $$;
-ALTER FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid)
+ALTER FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid,uuid)
   OWNER TO evstation_ingest_definer;
-REVOKE ALL ON FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION app.notify_event(text,uuid,uuid,uuid,uuid,timestamptz,uuid,uuid) FROM PUBLIC;
 
--- Meter throttle (one atomic UPDATE; NOTIFY only when it returns a throttled row):
+-- Meter throttle: the decision is computed first, then one atomic UPDATE:
+v_should_notify :=
+  (sess.last_meter_notify_at IS NULL OR
+   sess.last_meter_notify_at <= p_csms_timestamp
+     - make_interval(secs => coalesce(nullif(current_setting('evstation.meter_notify_interval_s', true), '')::int, 5)))
+  AND greatest(sess.energy_wh, greatest(0, v_max_energy - sess.meter_start_wh)) IS DISTINCT FROM sess.energy_wh;
 UPDATE app.sessions
-SET energy_wh = greatest(energy_wh, greatest(0, v_max_energy - meter_start_wh)),
-    last_meter_notify_at = CASE WHEN ... THEN p_csms_timestamp ELSE last_meter_notify_at END
-WHERE id = sess.id
-RETURNING (last_meter_notify_at = p_csms_timestamp) INTO v_notify;
+SET energy_wh = greatest(energy_wh, greatest(0, v_max_energy - sess.meter_start_wh)),
+    last_meter_notify_at = CASE WHEN v_should_notify THEN p_csms_timestamp ELSE last_meter_notify_at END,
+    updated_at = now()
+WHERE id = sess.id;
+IF v_should_notify THEN
+  PERFORM app.notify_event('session.meter', sess.tenant_id, sess.site_id,
+    sess.station_id, sess.id, p_csms_timestamp);
+END IF;
 ```
+
+`expire_pending_starts` is deliberately ledger-only: it parks an expired start
+request but emits no event, because a start that never got a response has no
+session to report.
 
 ## 13. Spikes (completed)
 
@@ -392,7 +415,7 @@ wording above. Implementation follows these amendments exactly.
 
 ### A4. Close/reconnect and BFF leak behaviour
 
-- Terminal reasons `membership_removed`, `role_demoted`, `tenant_suspended`,
+- Terminal reasons `membership_removed`, `tenant_suspended`,
   `site_scope_lost`: the browser calls `EventSource.close()` and shows an
   explanation; it does not auto-reconnect.
 - `token_expired` and `server_shutdown`: reconnect with jittered backoff.

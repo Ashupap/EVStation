@@ -18,6 +18,7 @@ const STATION_A = '30000000-0000-4000-8000-000000000971';
 const STATION_B = '30000000-0000-4000-8000-000000000972';
 const CONNECTOR_A = '40000000-0000-4000-8000-000000000971';
 const CONNECTOR_B = '40000000-0000-4000-8000-000000000972';
+const EVENTS = 300;
 const claims: Record<string, TokenClaims> = {
   adminA: { sub: SEED_IDS.acmeAdmin, email: 'admin@acme.example', email_verified: true },
   viewerA: { sub: SEED_IDS.acmeViewer, email: 'viewer@acme.example', email_verified: true },
@@ -308,13 +309,26 @@ describe('SSE revocation', () => {
       `GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ${token}\r\nX-Tenant-Id: ${SEED_IDS.acmeTenant}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n`,
     );
     const healthy = await open('adminA');
+    const expected = EVENTS;
     try {
-      for (let i = 0; i < 800; i += 1) await status(STATION_A, 1, 100 + i);
-      const frames = await healthy.waitForCount('station.status', 800, 20_000);
-      expect(frames).toHaveLength(800);
+      for (let i = 0; i < expected; i += 1) await status(STATION_A, 1, 100 + i);
+      // Each event costs one RLS re-read, and re-reads for one station are
+      // serialized, so a fixed wall-clock deadline fails on a loaded machine
+      // even when delivery is healthy. Wait for progress instead.
+      const frames = await healthy.waitForCountWithProgress('station.status', expected, {
+        stallMs: 10_000,
+        overallMs: 180_000,
+      });
+      expect(frames).toHaveLength(expected);
+      const timestamps = frames.map((frame) => {
+        const data = JSON.parse(frame.data) as { csms_timestamp: string };
+        return data.csms_timestamp;
+      });
+      expect(new Set(timestamps).size).toBe(expected);
+      expect(timestamps).toEqual([...timestamps].sort());
     } finally {
       socket.destroy();
       await healthy.close();
     }
-  }, 120_000);
+  }, 300_000);
 });

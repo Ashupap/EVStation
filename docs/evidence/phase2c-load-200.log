@@ -1,0 +1,58 @@
+
+phase2c SSE load — N concurrent streams with steady ingest
+run 2026-11-14T07:42:10.207Z
+node v24.22.2
+platform linux x64
+cpus 4 x Intel(R) Core(TM) i3-4005U CPU @ 1.70GHz
+total_memory_bytes 8222789632
+api_pid 2611210
+target_streams 200
+streams_opened 200
+streams_per_user_limit 10
+load_users 21
+stations 10
+ingest_rate_target 50/s
+ingest_duration_s 30
+frames_published 1500
+ingest_wall_ms 30021
+
+delivery
+sse_frames_received_total 300000
+sse_frames_per_stream_min 1500
+sse_frames_per_stream_mean 1500.00
+sse_frames_per_stream_max 1500
+sse_frames_by_kind {"station.status":300000}
+
+api
+api_cpu_seconds 2.5 -> 26.93
+api_cpu_seconds_delta 24.43
+api_rss_kb 115108 -> 178420
+api_rss_kb_delta 63312
+
+metrics (delta over the run)
+events_notified 1500
+events_dropped_not_visible 0
+events_dropped_queue_full 0
+backpressure_closes 0
+resyncs 0
+reread_p50_ms 82.24136500000168
+reread_p95_ms 146.33514899999864
+notification_queue_usage 0
+sse_connections_final 200
+
+derived
+events_notified_per_published 1.000
+fan_out_per_event 200.0
+re_reads_per_event 1 (one RLS re-read per NOTIFY; the payload carries ids only)
+stations_used_for_this_run 10 (per-station re-reads are serialized; total throughput scales with distinct stations)
+per_station_ceiling see the measured per-station re-read ceiling section below
+
+per-station re-read ceiling (one station, one stream)
+ceiling_station ACME-BLR-100
+  rate 50/s published 250 notified 250 dropped_queue_full 0
+  rate 100/s published 500 notified 500 dropped_queue_full 0
+  rate 150/s published 750 notified 750 dropped_queue_full 0
+  rate 200/s published 1000 notified 1000 dropped_queue_full 0
+  rate 300/s published 1500 notified 1323 dropped_queue_full 177
+ceiling_events_per_second 200
+ceiling_note the highest rate at which every published event was notified without the re-read queue dropping any; re-reads for one station are serialized

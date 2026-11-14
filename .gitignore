@@ -37,3 +37,6 @@ infra/compose/keycloak/data/
 
 # Vitest
 .vitest-cache/
+
+# Local reviewer drop packages (zips, diffs and logs handed over per review round)
+review-dropa-*/

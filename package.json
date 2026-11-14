@@ -30,7 +30,9 @@
     "test:ocpp:production-like": "node scripts/ocpp-production-like-test.mjs",
     "worker": "pnpm --filter @evstation/worker start",
     "worker:dev": "pnpm --filter @evstation/worker dev",
-    "test:e2e:phase2b": "node tools/phase2b-e2e.mjs"
+    "test:e2e:phase2b": "node tools/phase2b-e2e.mjs",
+    "test:e2e:phase2c-latency": "node tools/phase2c-latency.mjs",
+    "test:e2e:phase2c-load": "node tools/phase2c-load.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
